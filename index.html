@@ -1365,10 +1365,21 @@
           <div class="setting-row">
             <div class="setting-info">
               <strong>Detectar zonas sin señal en segundo plano</strong>
-              <span>Registra automáticamente puntos de pérdida de cobertura para advertir en futuras rutas.</span>
+              <span>Registra automáticamente puntos donde la desconexión dura más de 25 segundos para evitar falsos avisos al cambiar de red.</span>
             </div>
             <label class="switch">
               <input id="cfg-sin-senal" type="checkbox" onchange="saveSettings()" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Mostrar zonas sin señal en el mapa</strong>
+              <span>Muestra u oculta los círculos grises de pérdida de cobertura en tu pantalla.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-ver-sin-senal" type="checkbox" onchange="saveSettings(); loadZonasSinSenal();" />
               <span class="slider"></span>
             </label>
           </div>
@@ -1800,6 +1811,7 @@
     // ESTADO GLOBAL
     // =========================================================================
     const DEFAULT_POS = [22.275, -97.862];
+    const DEAD_ZONE_MIN_OFFLINE_MS = 25000; // 25 s continuos sin señal
     let map, tileLayer, userMarker, routeLine, destMarker;
     let reportesLayer, paraderosLayer, riesgosLayer, sinSenalLayer;
 
@@ -1860,6 +1872,7 @@
       velocidad: 0,
       tono: 0,
       sinSenal: true,
+      mostrarSinSenal: true,
       pesados: true,
       detencion: true,
       recalculo: true,
@@ -2066,6 +2079,7 @@
       } catch (_) {}
       document.getElementById("cfg-tts").checked = settings.tts;
       document.getElementById("cfg-sin-senal").checked = settings.sinSenal;
+      document.getElementById("cfg-ver-sin-senal").checked = settings.mostrarSinSenal !== false;
       document.getElementById("cfg-pesados").checked = settings.pesados;
       document.getElementById("cfg-detencion").checked = settings.detencion;
       document.getElementById("cfg-recalculo").checked = settings.recalculo;
@@ -2082,6 +2096,7 @@
     function saveSettings() {
       settings.tts = document.getElementById("cfg-tts").checked;
       settings.sinSenal = document.getElementById("cfg-sin-senal").checked;
+      settings.mostrarSinSenal = document.getElementById("cfg-ver-sin-senal").checked;
       settings.pesados = document.getElementById("cfg-pesados").checked;
       settings.detencion = document.getElementById("cfg-detencion").checked;
       settings.recalculo = document.getElementById("cfg-recalculo").checked;
@@ -2496,6 +2511,7 @@
 
     async function loadZonasSinSenal() {
       sinSenalLayer.clearLayers();
+      if (!settings.mostrarSinSenal) return;
       try {
         const r = await fetch(`/zonas-sin-senal?lat=${currentPos.lat}&lng=${currentPos.lng}`);
         if (!r.ok) return;
@@ -2507,16 +2523,20 @@
             weight: 1,
             dashArray: "4 4",
             fillColor: "#64748b",
-            fillOpacity: 0.12,
-            interactive: false
-          }).addTo(sinSenalLayer);
+            fillOpacity: 0.12
+          }).bindPopup(`<strong>Zona sin señal reportada</strong><br/>Reportes pasivos: ${z.conteo || 1}<br/><small>Radio aprox. ${z.radio_m || 650} m</small>`).addTo(sinSenalLayer);
         }
       } catch (_) {}
     }
 
     window.addEventListener("offline", () => {
       if (!settings.sinSenal) return;
-      try { localStorage.setItem("pending_dead_zone", JSON.stringify({ lat: currentPos.lat, lng: currentPos.lng })); } catch (_) {}
+      try {
+        localStorage.setItem(
+          "pending_dead_zone",
+          JSON.stringify({ lat: currentPos.lat, lng: currentPos.lng, ts: Date.now() })
+        );
+      } catch (_) {}
     });
 
     window.addEventListener("online", async () => {
@@ -2526,6 +2546,9 @@
       localStorage.removeItem("pending_dead_zone");
       try {
         const pt = JSON.parse(raw);
+        if (!pt || !pt.ts || (Date.now() - pt.ts) < DEAD_ZONE_MIN_OFFLINE_MS) {
+          return; // Ignora microcortes al cambiar entre Wi-Fi y datos móviles
+        }
         await fetch("/zonas-sin-senal", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
