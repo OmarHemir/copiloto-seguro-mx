@@ -1,0 +1,3337 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Copiloto Seguro MX</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    :root {
+      --bg: #f1f5f9;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #cbd5e1;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --danger: #dc2626;
+      --warn: #d97706;
+      --ok: #16a34a;
+      --shadow: 0 6px 20px rgba(15, 23, 42, 0.12);
+      --radius: 14px;
+      --nav-h: 64px;
+    }
+
+    body.dark {
+      --bg: #070d19;
+      --surface: #0f172a;
+      --surface-2: #162033;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    .icon {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    .icon-sm { width: 16px; height: 16px; }
+    .icon-lg { width: 22px; height: 22px; }
+
+    /* Vistas principales */
+    .views {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: var(--nav-h);
+      overflow: hidden;
+    }
+
+    .view {
+      display: none;
+      width: 100%;
+      height: 100%;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .view.active { display: block; }
+    #view-mapa { overflow: hidden; }
+    #map { width: 100%; height: 100%; z-index: 1; background: var(--bg); }
+    #map.pick-mode { cursor: crosshair !important; }
+    #map.pick-mode .leaflet-overlay-pane,
+    #map.pick-mode .leaflet-marker-pane {
+      pointer-events: none !important;
+    }
+
+    /* Modo oscuro sobre los mosaicos de OpenStreetMap (sin afectar pines ni rutas) */
+    body.dark #map { background: #0b1120; }
+    body.dark .leaflet-tile-pane {
+      filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(92%) saturate(75%);
+    }
+    body.dark .leaflet-control-attribution {
+      background: rgba(15, 23, 42, 0.85) !important;
+      color: #94a3b8 !important;
+    }
+    body.dark .leaflet-control-attribution a { color: #60a5fa !important; }
+
+    /* Banner superior en modo selección manual de destino */
+    .pick-banner {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 600;
+      background: #1d4ed8;
+      color: #ffffff;
+      padding: 9px 16px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+      display: none;
+      align-items: center;
+      gap: 10px;
+      max-width: 90%;
+    }
+    .pick-banner.show { display: inline-flex; }
+    .pick-banner button {
+      border: 1px solid rgba(255,255,255,0.45);
+      background: rgba(255,255,255,0.16);
+      color: #ffffff;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* Contenedor interior para pestañas con scroll */
+    .page-wrap {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 18px 16px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    /* HUD superior izquierdo del mapa */
+    .hud-tl {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 500;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+      max-width: 245px;
+    }
+
+    .hud-tl > * { pointer-events: auto; }
+
+    .eta-card {
+      background: rgba(15, 23, 42, 0.92);
+      color: #f8fafc;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px;
+      padding: 10px 14px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .eta-label {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      font-weight: 700;
+    }
+
+    .eta-time {
+      font-size: 22px;
+      font-weight: 800;
+      margin: 2px 0;
+      line-height: 1.1;
+    }
+
+    .eta-sub {
+      font-size: 12px;
+      color: #cbd5e1;
+      line-height: 1.35;
+    }
+
+    .semaforo-hud {
+      margin-top: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .semaforo-hud.VERDE { background: rgba(22, 163, 74, 0.22); border-color: rgba(34, 197, 94, 0.55); color: #86efac; }
+    .semaforo-hud.AMARILLO { background: rgba(217, 119, 6, 0.25); border-color: rgba(245, 158, 11, 0.6); color: #fcd34d; }
+    .semaforo-hud.ROJO { background: rgba(220, 38, 38, 0.28); border-color: rgba(239, 68, 68, 0.65); color: #fca5a5; }
+    .semaforo-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .fuel-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 7px 13px;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      width: fit-content;
+    }
+
+    .fuel-pill.low {
+      border-color: var(--danger);
+      color: #fca5a5;
+      background: #450a0a;
+    }
+
+    /* Controles laterales derechos del mapa */
+    .hud-tr {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 500;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .hud-tr > * { pointer-events: auto; }
+
+    .map-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform 0.12s ease, background 0.15s ease;
+    }
+
+    .map-btn:active { transform: scale(0.94); }
+    .map-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .speed-limit {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #ffffff;
+      color: #0f172a;
+      border: 4px solid #dc2626;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      box-shadow: var(--shadow);
+      line-height: 1;
+    }
+
+    .speed-limit small { font-size: 8px; font-weight: 800; color: #475569; }
+    .speed-limit strong { font-size: 14px; font-weight: 900; }
+
+    .speed-now {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: #0f172a;
+      color: #f8fafc;
+      border: 2px solid #334155;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      box-shadow: var(--shadow);
+      line-height: 1;
+    }
+
+    .speed-now.over { border-color: #dc2626; background: #7f1d1d; }
+    .speed-now strong { font-size: 16px; font-weight: 800; }
+    .speed-now small { font-size: 8px; color: #cbd5e1; margin-top: 2px; }
+
+    .sos-btn {
+      min-width: 56px;
+      height: 40px;
+      padding: 0 14px;
+      border-radius: 10px;
+      border: 1px solid #ef4444;
+      background: #dc2626;
+      color: #ffffff;
+      font-weight: 900;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .cb-pill {
+      padding: 7px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.92);
+      color: #e2e8f0;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .cb-pill.on {
+      background: #14532d;
+      border-color: #22c55e;
+      color: #dcfce7;
+    }
+
+    /* Barra flotante de acciones en mapa */
+    .hud-bottom {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100% - 20px);
+      overflow-x: auto;
+      padding: 4px;
+    }
+
+    .pill-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .pill-action.warn { background: #ea580c; border-color: #f97316; color: #ffffff; }
+    .pill-action.primary { background: #2563eb; border-color: #3b82f6; color: #ffffff; }
+    .pill-action.dark-solid { background: #0f172a; border-color: #334155; color: #f8fafc; }
+
+    /* Modo Cabina */
+    body.cabin-mode .pill-action { padding: 14px 18px; font-size: 15px; }
+    body.cabin-mode .eta-time { font-size: 30px; }
+    body.cabin-mode .speed-now { width: 64px; height: 64px; }
+    body.cabin-mode .speed-now strong { font-size: 20px; }
+    body.cabin-mode .sos-btn { height: 48px; font-size: 15px; padding: 0 18px; }
+    body.cabin-mode .map-btn { width: 48px; height: 48px; }
+
+    /* Navegación inferior */
+    .bottom-nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--nav-h);
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      z-index: 700;
+    }
+
+    .nav-item {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: color 0.15s ease;
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    /* Formularios */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .input, select.input, textarea.input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+    }
+
+    textarea.input { resize: vertical; min-height: 96px; }
+    .input:focus { border-color: var(--accent); }
+    .input:disabled { opacity: 0.65; cursor: not-allowed; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-danger { background: var(--danger); border-color: var(--danger); color: #ffffff; }
+    .btn-ok { background: var(--ok); border-color: var(--ok); color: #ffffff; }
+    .btn-warn { background: var(--warn); border-color: var(--warn); color: #ffffff; }
+    .btn-sm { padding: 7px 12px; font-size: 12px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    .badge.ok { background: rgba(22, 163, 74, 0.16); border-color: rgba(34, 197, 94, 0.45); color: #4ade80; }
+    .badge.warn { background: rgba(217, 119, 6, 0.16); border-color: rgba(245, 158, 11, 0.45); color: #fbbf24; }
+    .badge.danger { background: rgba(220, 38, 38, 0.18); border-color: rgba(239, 68, 68, 0.5); color: #f87171; }
+    body:not(.dark) .badge.ok { color: #15803d; }
+    body:not(.dark) .badge.warn { color: #b45309; }
+    body:not(.dark) .badge.danger { color: #b91c1c; }
+
+    .summary-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    /* Resultados de búsqueda y rutas */
+    .search-row { display: flex; gap: 8px; }
+
+    .place-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .place-item {
+      width: 100%;
+      text-align: left;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .place-item:hover { border-color: var(--accent); }
+    .place-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .routes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .route-card {
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s ease;
+    }
+
+    .route-card:hover, .route-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .semaforo-box {
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      border: 1px solid var(--border);
+    }
+    .semaforo-box.VERDE { background: rgba(22, 163, 74, 0.12); border-color: rgba(34, 197, 94, 0.35); }
+    .semaforo-box.AMARILLO { background: rgba(217, 119, 6, 0.14); border-color: rgba(245, 158, 11, 0.45); }
+    .semaforo-box.ROJO { background: rgba(220, 38, 38, 0.15); border-color: rgba(239, 68, 68, 0.5); }
+
+    /* Switches modernos en Configuración */
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .setting-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .setting-row:first-of-type { padding-top: 4px; }
+
+    .setting-info strong {
+      display: block;
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .setting-info span {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 46px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      left: 3px;
+      top: 3px;
+      border-radius: 50%;
+      background: #ffffff;
+      transition: transform 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+
+    /* Sliders de rango (voz) */
+    .range-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    .range-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Líneas de auxilio en atención al cliente */
+    .help-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .help-tile {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .help-tile:hover { border-color: var(--accent); }
+    .help-tile strong { font-size: 15px; color: var(--accent); }
+    .help-tile span { font-size: 12px; color: var(--muted); }
+
+    /* Acordeones legales */
+    details.legal-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      padding: 10px 14px;
+      margin-top: 10px;
+    }
+
+    details.legal-item summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--text);
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    details.legal-item summary::after {
+      content: "+";
+      font-size: 16px;
+      color: var(--muted);
+    }
+
+    details.legal-item[open] summary::after { content: "−"; }
+
+    .legal-body {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .legal-body ul { margin: 6px 0 0 18px; padding: 0; }
+    .legal-body li { margin-bottom: 5px; }
+
+    /* Firma inferior centrada */
+    .brand-footer {
+      text-align: center;
+      padding: 12px 8px 6px;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+
+    .brand-footer strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    /* Modales */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.72);
+      z-index: 900;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: 100%;
+      max-width: 480px;
+      max-height: 86vh;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-head h3 {
+      margin: 0;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-close {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .countdown-num {
+      font-size: 36px;
+      font-weight: 900;
+      text-align: center;
+      color: #f59e0b;
+      line-height: 1;
+      margin: 4px 0;
+    }
+
+    /* Chat del Copiloto */
+    .chat-box {
+      max-height: 260px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+
+    .msg {
+      padding: 9px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: 90%;
+    }
+
+    .msg.user { align-self: flex-end; background: var(--accent); color: #ffffff; }
+    .msg.bot { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+
+    /* Lista de avisos */
+    .avisos-list { display: flex; flex-direction: column; gap: 10px; }
+    .aviso-item {
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1200;
+      background: #0f172a;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      display: none;
+      max-width: 90%;
+      text-align: center;
+    }
+
+    .toast.show { display: block; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="toast" class="toast"></div>
+
+  <div class="views">
+    <!-- ==================== VISTA MAPA ==================== -->
+    <section id="view-mapa" class="view active">
+      <div id="map"></div>
+
+      <!-- Banner de selección manual en mapa -->
+      <div id="pick-banner" class="pick-banner">
+        <span>Toca cualquier punto del mapa para fijar destino</span>
+        <button onclick="togglePickDestination(false)">Cancelar</button>
+      </div>
+
+      <!-- HUD Superior Izquierdo -->
+      <div class="hud-tl">
+        <div class="eta-card">
+          <div class="eta-label">Llegada estimada</div>
+          <div id="hud-eta" class="eta-time">--:--</div>
+          <div id="hud-dist" class="eta-sub">-- km restantes</div>
+          <div id="hud-clima" class="eta-sub">Consultando clima...</div>
+          <div id="hud-semaforo" class="semaforo-hud hidden">
+            <span class="semaforo-dot"></span>
+            <span id="hud-semaforo-text">Horario seguro</span>
+          </div>
+        </div>
+
+        <button id="fuel-pill" class="fuel-pill hidden" onclick="switchTab('perfil')" title="Ir a calculadora de combustible">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M3 22h12"></path>
+            <path d="M4 9h10"></path>
+            <path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"></path>
+            <path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2a2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"></path>
+          </svg>
+          <span id="fuel-pill-text">~480 km (40 L)</span>
+        </button>
+      </div>
+
+      <!-- HUD Superior Derecho -->
+      <div class="hud-tr">
+        <button id="btn-theme-map" class="map-btn" onclick="toggleDarkMode()" title="Cambiar tema claro/oscuro">
+          <svg id="icon-theme-map" class="icon" viewBox="0 0 24 24">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+
+        <button id="btn-cabin-map" class="map-btn" onclick="toggleCabinMode()" title="Modo Cabina">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M5 17h14v-5l-2-5H7l-2 5v5z"></path>
+            <circle cx="7.5" cy="17.5" r="1.5"></circle>
+            <circle cx="16.5" cy="17.5" r="1.5"></circle>
+          </svg>
+        </button>
+
+        <button id="btn-pick-dest" class="map-btn" onclick="togglePickDestination()" title="Seleccionar destino con un clic en el mapa">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+            <circle cx="12" cy="10" r="3"></circle>
+          </svg>
+        </button>
+
+        <button class="map-btn" onclick="centerOnUser()" title="Centrar en mi ubicación">
+          <svg class="icon" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path>
+          </svg>
+        </button>
+
+        <button id="btn-paraderos-map" class="map-btn" onclick="openModal('modal-paraderos')" title="Paraderos y zonas de descanso">
+          <svg class="icon" viewBox="0 0 24 24">
+            <rect x="4" y="3" width="16" height="18" rx="3"></rect>
+            <path d="M9 17V7h4a3 3 0 0 1 0 6H9"></path>
+          </svg>
+        </button>
+
+        <div class="speed-row">
+          <div class="speed-limit" title="Límite de velocidad en tramo">
+            <small>MAX</small>
+            <strong id="hud-limit">--</strong>
+          </div>
+          <div id="hud-speed-box" class="speed-now" title="Velocidad actual">
+            <strong id="hud-speed">0</strong>
+            <small>KM/H</small>
+          </div>
+        </div>
+
+        <button class="sos-btn" onclick="openModal('modal-sos')">SOS</button>
+
+        <button id="btn-cb-toggle" class="cb-pill" onclick="toggleCBListening()">CB: OFF</button>
+
+        <button class="map-btn" onclick="openModal('modal-cb')" title="Abrir Radio CB">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"></path>
+            <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"></path>
+            <circle cx="12" cy="12" r="2"></circle>
+            <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"></path>
+            <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Barra de Acciones Flotantes -->
+      <div class="hud-bottom">
+        <button class="pill-action warn" onclick="openModal('modal-reporte')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          Reportar
+        </button>
+
+        <button class="pill-action dark-solid" onclick="openModal('modal-avisos')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          Avisos (<span id="avisos-count">0</span>)
+        </button>
+
+        <button class="pill-action primary" onclick="openModal('modal-ia')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+          Copiloto IA
+        </button>
+
+        <button class="pill-action dark-solid" onclick="activarAntisuenio()">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M18 8h1a4 4 0 0 1 0 8h-1"></path>
+            <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path>
+            <line x1="6" y1="1" x2="6" y2="4"></line>
+            <line x1="10" y1="1" x2="10" y2="4"></line>
+            <line x1="14" y1="1" x2="14" y2="4"></line>
+          </svg>
+          Anti-sueño
+        </button>
+      </div>
+    </section>
+
+    <!-- ==================== VISTA PERFIL ==================== -->
+    <section id="view-perfil" class="view">
+      <div class="page-wrap">
+        <div id="auth-box" class="card">
+          <div class="card-header">
+            <h2 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+              Acceso de conductor
+            </h2>
+          </div>
+          <p class="muted" style="margin-top:0;">
+            Inicia sesión para guardar tu perfil de vehículo, calcular autonomía, reportar incidencias, usar Radio CB y compartir tu viaje en vivo.
+          </p>
+
+          <div id="google-btn-container" style="margin: 14px 0;"></div>
+          <div id="google-no-id" class="muted hidden">
+            El acceso con Google no está configurado todavía en el servidor.
+          </div>
+
+          <div id="dev-auth-box" class="hidden" style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
+            <div class="muted" style="margin-bottom:8px; font-weight:600;">Acceso rápido en modo local</div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Correo</label>
+                <input id="dev-email" class="input" type="email" value="conductor@local.mx" />
+              </div>
+              <div class="field">
+                <label>Nombre real (privado)</label>
+                <input id="dev-name" class="input" type="text" value="Conductor Local" />
+              </div>
+            </div>
+            <button class="btn btn-primary" style="margin-top:12px;" onclick="loginDev()">Entrar en modo local</button>
+          </div>
+        </div>
+
+        <div id="perfil-content" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
+          <div class="card">
+            <div class="card-header" style="margin-bottom:8px;">
+              <h2 class="card-title">Cuenta del conductor</h2>
+              <button class="btn btn-danger btn-sm" onclick="logout()">Cerrar sesión</button>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <span id="badge-username" class="badge ok">@sin_usuario</span>
+              <span id="perfil-email" class="muted"></span>
+              <span id="badge-rep" class="badge">Rep: 1</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Identidad y vehículo</h3>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Nombre real (privado — solo para rastreo y SOS)</label>
+                <input id="p-nombre" class="input" type="text" maxlength="80" />
+              </div>
+              <div class="field">
+                <label>Nombre de usuario único (público, 3-20 caracteres)</label>
+                <input id="p-username" class="input" type="text" maxlength="20" placeholder="Ej. RutaNorteMX" />
+                <span id="p-username-hint" class="muted" style="font-size:12px;"></span>
+              </div>
+            </div>
+
+            <div class="grid-3" style="margin-top:12px;">
+              <div class="field">
+                <label>Tipo de vehículo</label>
+                <select id="p-vehiculo" class="input" onchange="onVehiculoPreset()">
+                  <option value="auto">Auto / Camioneta</option>
+                  <option value="camion">Camión unitario</option>
+                  <option value="trailer">Tráiler / Articulado</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Altura (metros)</label>
+                <input id="p-altura" class="input" type="number" step="0.1" min="1.2" max="5.5" />
+              </div>
+              <div class="field">
+                <label>Peso total (toneladas)</label>
+                <input id="p-peso" class="input" type="number" step="0.5" min="0.5" max="80" />
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Calculadora de combustible y autonomía</h3>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label>Combustible</label>
+                <select id="p-comb" class="input">
+                  <option value="magna">Magna</option>
+                  <option value="premium">Premium</option>
+                  <option value="diesel">Diésel</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Precio por litro (MXN)</label>
+                <input id="p-precio" class="input" type="number" step="0.1" min="10" max="60" oninput="updateFuelSummary()" />
+              </div>
+              <div class="field">
+                <label>Rendimiento (km/L)</label>
+                <input id="p-rend" class="input" type="number" step="0.1" min="1" max="40" oninput="updateFuelSummary()" />
+              </div>
+              <div class="field">
+                <label>Capacidad del tanque (L)</label>
+                <input id="p-cap" class="input" type="number" step="1" min="10" max="1500" oninput="updateFuelSummary()" />
+              </div>
+              <div class="field">
+                <label>Litros actuales aproximados (L)</label>
+                <input id="p-litros" class="input" type="number" step="1" min="0" max="1500" oninput="updateFuelSummary()" />
+              </div>
+              <div class="field" style="justify-content:flex-end;">
+                <label style="display:flex; align-items:center; gap:10px; cursor:pointer; color:var(--text); font-size:13px; padding:8px 0;">
+                  <span class="switch">
+                    <input id="p-pildora" type="checkbox" />
+                    <span class="slider"></span>
+                  </span>
+                  Mostrar píldora en mapa
+                </label>
+              </div>
+            </div>
+            <div id="fuel-summary" class="summary-box">Autonomía estimada: --</div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Seguridad y emergencia</h3>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Contacto de emergencia (nombre)</label>
+                <input id="p-sos-nombre" class="input" type="text" maxlength="80" placeholder="Ej. Base / Familiar" />
+              </div>
+              <div class="field">
+                <label>Teléfono de emergencia (10 dígitos)</label>
+                <input id="p-sos-tel" class="input" type="tel" maxlength="25" placeholder="Ej. 8331234567" />
+              </div>
+            </div>
+            <div class="field" style="margin-top:12px;">
+              <label>Frase clave SOS encubierta (se guarda cifrada de forma irreversible)</label>
+              <input id="p-sos-frase" class="input" type="password" maxlength="80" placeholder="Opcional: al decirla al Copiloto activa SOS silencioso" />
+              <span id="p-sos-estado" class="muted" style="font-size:12px;"></span>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="guardarPerfil()">Guardar perfil</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VISTA RUTA ==================== -->
+    <section id="view-ruta" class="view">
+      <div class="page-wrap">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="6" cy="19" r="3"></circle>
+                <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                <circle cx="18" cy="5" r="3"></circle>
+              </svg>
+              Trazar ruta
+            </h2>
+            <button class="btn btn-sm" onclick="switchTab('mapa'); togglePickDestination(true);">Elegir en mapa</button>
+          </div>
+          <p class="muted" style="margin-top:0;">
+            Prioriza carreteras pavimentadas, evalúa el Semáforo de Horario Seguro y compara cuota contra libre con casetas, combustible y avisos en el tramo.
+          </p>
+          <div class="search-row">
+            <input id="ruta-query" class="input" type="text" placeholder="Ej. Tampico Centro, Monterrey, Estadio Banorte..." onkeydown="if(event.key==='Enter') buscarLugar()" />
+            <button class="btn btn-primary" onclick="buscarLugar()">Buscar</button>
+          </div>
+          <div id="ruta-resultados" class="place-list"></div>
+          <div id="ruta-opciones" class="routes-grid"></div>
+          <div id="ruta-acciones-activas" class="hidden" style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="limpiarRuta()">Limpiar ruta activa</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+              Rastreo en vivo y detección de detención anómala
+            </h3>
+          </div>
+          <p class="muted" style="margin-top:0;">
+            Genera un enlace temporal de 24 horas con ubicación, velocidad y ETA. Si te detienes más de 10 minutos en carretera sin confirmar que estás bien, el enlace enciende una alerta ámbar automática.
+          </p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <button id="btn-share-trip" class="btn btn-ok" onclick="iniciarRastreo()">Compartir viaje en vivo</button>
+            <button id="btn-stop-trip" class="btn btn-danger hidden" onclick="detenerRastreo()">Detener seguimiento</button>
+            <button id="btn-demo-stall" class="btn btn-warn btn-sm hidden" onclick="dispararChequeoDetencion(true)">Simular detención (demo)</button>
+          </div>
+          <div id="rastreo-link-box" class="summary-box hidden" style="word-break:break-all;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VISTA CONFIGURACIÓN ==================== -->
+    <section id="view-config" class="view">
+      <div class="page-wrap">
+        <!-- Tarjeta 1: Voz del Copiloto -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+              </svg>
+              Voz del Copiloto
+            </h2>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Leer respuestas del Copiloto por voz</strong>
+              <span>Reproduce automáticamente las respuestas del asistente, recálculos y modo anti-sueño.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-tts" type="checkbox" onchange="saveSettings()" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="field" style="margin-top:12px;">
+            <label>Voz neuronal (México)</label>
+            <select id="cfg-voz" class="input" onchange="saveSettings()"></select>
+          </div>
+
+          <div class="range-group">
+            <div class="range-head">
+              <span>Velocidad de lectura</span>
+              <span id="lbl-velocidad" class="muted">Normal (0%)</span>
+            </div>
+            <input id="cfg-velocidad" type="range" min="-30" max="40" step="5" value="0" oninput="updateVoiceLabels(); saveSettings();" />
+          </div>
+
+          <div class="range-group">
+            <div class="range-head">
+              <span>Tono de voz</span>
+              <span id="lbl-tono" class="muted">Natural (0 Hz)</span>
+            </div>
+            <input id="cfg-tono" type="range" min="-20" max="20" step="2" value="0" oninput="updateVoiceLabels(); saveSettings();" />
+          </div>
+
+          <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" onclick="probarVoz()">Probar voz</button>
+            <button class="btn btn-sm" onclick="resetVoiceSettings()">Restablecer valores</button>
+          </div>
+        </div>
+
+        <!-- Tarjeta 2: Seguridad y Navegación -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+              Seguridad y navegación
+            </h3>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Mantener pantalla encendida al conducir</strong>
+              <span>Evita que Android bloquee la pantalla y pause el GPS o el rastreo en vivo mientras vas en ruta.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-wakelock" type="checkbox" onchange="saveSettings(); syncWakeLock();" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Monitor de detención anómala</strong>
+              <span>Si te detienes más de 10 minutos con rastreo activo, pregunta por voz y alerta en tu enlace si no confirmas.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-detencion" type="checkbox" onchange="saveSettings()" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Recálculo automático de ruta</strong>
+              <span>Si te desvías más de 250 metros de la carretera trazada, recalcula la ruta automáticamente.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-recalculo" type="checkbox" onchange="saveSettings()" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Detectar zonas sin señal en segundo plano</strong>
+              <span>Registra automáticamente puntos de pérdida de cobertura para advertir en futuras rutas.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-sin-senal" type="checkbox" onchange="saveSettings()" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Consultar puentes bajos y pendientes pronunciadas</strong>
+              <span>Muestra advertencias de altura y pendientes para unidades pesadas en el mapa.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-pesados" type="checkbox" onchange="saveSettings(); loadRiesgosPesados();" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Tarjeta 3: Radio CB y Apariencia -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+              Radio CB y apariencia
+            </h3>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Escuchar Radio CB activo</strong>
+              <span>Permanece apagado por defecto al iniciar la aplicación hasta que lo actives manualmente.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-cb" type="checkbox" onchange="toggleCBListening(this.checked)" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Modo oscuro nocturno</strong>
+              <span>Aplica interfaz y cartografía oscura para reducir fatiga visual al conducir de noche.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-dark" type="checkbox" onchange="setDarkMode(this.checked)" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <strong>Modo Cabina</strong>
+              <span>Amplía los controles críticos y el velocímetro para reducir distracciones al volante.</span>
+            </div>
+            <label class="switch">
+              <input id="cfg-cabin" type="checkbox" onchange="setCabinMode(this.checked)" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Tarjeta 4: Mensajes y Sugerencias -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+              Mensajes y sugerencias
+            </h3>
+          </div>
+          <p class="muted" style="margin-top:0;">
+            ¿Encontraste una falla, tienes una idea para carretera o quieres colaborar con una flotilla? Envía un mensaje directo al equipo desde aquí.
+          </p>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>Categoría</label>
+              <select id="sop-cat" class="input">
+                <option value="SUGERENCIA">Sugerencia de mejora</option>
+                <option value="FALLA_TECNICA">Reportar falla técnica</option>
+                <option value="SOPORTE">Ayuda con mi cuenta o app</option>
+                <option value="NEGOCIOS">Flotillas / Alianzas comerciales</option>
+                <option value="OTRO">Otro mensaje</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Tu correo de respuesta (opcional)</label>
+              <input id="sop-correo" class="input" type="email" maxlength="120" placeholder="ejemplo@correo.com" />
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:10px;">
+            <label>Asunto</label>
+            <input id="sop-asunto" class="input" type="text" maxlength="120" placeholder="Ej. Sugerencia para casetas en Tamaulipas" />
+          </div>
+
+          <div class="field" style="margin-top:10px;">
+            <label>Mensaje</label>
+            <textarea id="sop-mensaje" class="input" maxlength="1500" placeholder="Cuéntanos con detalle qué ocurrió o qué función te gustaría ver..."></textarea>
+          </div>
+
+          <div style="margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <button id="btn-enviar-soporte" class="btn btn-primary btn-sm" onclick="enviarMensajeSoporte()">Enviar mensaje</button>
+            <span class="muted" style="font-size:12px;">Destino: <strong id="sop-email-dest">copilotoseguromx@gmail.com</strong></span>
+          </div>
+          <div id="sop-status" class="summary-box hidden"></div>
+        </div>
+
+        <!-- Tarjeta 5: Atención al Cliente y Asistencia -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+              </svg>
+              Atención al cliente y asistencia
+            </h3>
+          </div>
+          <p class="muted" style="margin-top:0;">
+            Soporte técnico, reportes de abuso comunitario y atención a operadores vía correo directo:
+            <a id="sop-mailto-link" href="mailto:copilotoseguromx@gmail.com" style="color:var(--accent); font-weight:700; text-decoration:none;">copilotoseguromx@gmail.com</a>.
+          </p>
+
+          <strong style="font-size:13px; display:block; margin-top:8px;">Auxilio carretero inmediato en México</strong>
+          <div class="help-grid">
+            <a class="help-tile" href="tel:911">
+              <strong>911</strong>
+              <span>Emergencias generales</span>
+            </a>
+            <a class="help-tile" href="tel:088">
+              <strong>088</strong>
+              <span>Guardia Nacional Carreteras</span>
+            </a>
+            <a class="help-tile" href="tel:078">
+              <strong>078</strong>
+              <span>Ángeles Verdes (Auxilio vial)</span>
+            </a>
+            <a class="help-tile" href="tel:074">
+              <strong>074</strong>
+              <span>CAPUFE (Autopistas de cuota)</span>
+            </a>
+          </div>
+
+          <details class="legal-item">
+            <summary>¿Cómo instalar como app en Android?</summary>
+            <div class="legal-body">
+              Abre esta página en Chrome o Brave desde tu teléfono, toca el menú de tres puntos y elige <strong>Agregar a la pantalla principal</strong> (o <strong>Instalar aplicación</strong>). Se abrirá a pantalla completa con su propio ícono.
+            </div>
+          </details>
+
+          <details class="legal-item">
+            <summary>¿El GPS o el micrófono no responden?</summary>
+            <div class="legal-body">
+              Verifica que entraste por el enlace seguro <strong>HTTPS</strong>, concede permisos de Ubicación y Micrófono en el candado de la barra de direcciones y mantén activo <strong>Mantener pantalla encendida al conducir</strong>.
+            </div>
+          </details>
+        </div>
+
+        <!-- Tarjeta 6: Acerca de y Marco Legal -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              Acerca de y marco legal
+            </h3>
+            <span id="app-version-badge" class="badge">v1.2.0-alpha</span>
+          </div>
+
+          <div class="muted">
+            <strong>Copiloto Seguro MX</strong> · Compilación 2026.11 · Asistente vial colaborativo diseñado para conductores y operadores en carreteras de México.
+          </div>
+
+          <details class="legal-item">
+            <summary>Aviso de privacidad (LFPDPPP)</summary>
+            <div class="legal-body">
+              Conforme a los principios de la Ley Federal de Protección de Datos Personales en Posesión de los Particulares (México), el tratamiento de datos en esta plataforma sigue las siguientes reglas:
+              <ul>
+                <li><strong>Datos estrictamente privados:</strong> Tu nombre real, correo de Google, teléfono de emergencia y frase clave SOS (almacenada únicamente mediante hash criptográfico irreversible) nunca se muestran a otros usuarios.</li>
+                <li><strong>Datos visibles para la comunidad:</strong> Únicamente tu nombre de usuario único (<code>@usuario</code>), los avisos viales y los paraderos que decidas publicar.</li>
+                <li><strong>Ubicación GPS y rastreo:</strong> Tu ubicación solo se transmite fuera de tu sesión si generas manualmente un enlace temporal de seguimiento, el cual caduca automáticamente a las 24 horas o al detenerlo.</li>
+                <li><strong>Radio CB:</strong> Los mensajes de voz son efímeros (se eliminan automáticamente tras unos minutos) y se transmiten sin revelar tu identidad ni tus coordenadas exactas.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="legal-item">
+            <summary>Librerías, motores y atribuciones</summary>
+            <div class="legal-body">
+              Esta aplicación integra software y datos geográficos de código abierto y servicios externos bajo sus respectivas licencias:
+              <ul>
+                <li><strong>Cartografía y búsquedas:</strong> &copy; OpenStreetMap contributors (licencia ODbL), Nominatim y Overpass API.</li>
+                <li><strong>Visualización de mapa:</strong> Leaflet.js (licencia BSD-2-Clause).</li>
+                <li><strong>Cálculo de rutas:</strong> Motor Valhalla (licencia MIT).</li>
+                <li><strong>Backend y base de datos:</strong> FastAPI, Starlette y Uvicorn (licencia MIT); PostgreSQL / SQLite.</li>
+                <li><strong>Clima, voz e inteligencia artificial:</strong> Open-Meteo API, Edge-TTS, Google Identity Services (OAuth 2.0) y Google Gemini API.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="legal-item">
+            <summary>Deslinde de responsabilidad vial</summary>
+            <div class="legal-body">
+              <ul>
+                <li>Las rutas trazadas, estimaciones de casetas, límites de velocidad, semáforo de horario, consumo de combustible y reportes comunitarios tienen carácter estrictamente informativo y pueden variar respecto a las condiciones reales del camino.</li>
+                <li>Esta herramienta no sustituye el reglamento de tránsito vigente, la señalización oficial de la SICT ni el criterio y responsabilidad del conductor al volante.</li>
+                <li>Las funciones de alerta SOS, detección de detención anómala y Radio CB son auxiliares de comunicación y <strong>no reemplazan</strong> a los servicios oficiales de emergencia en México (<strong>911</strong> y Guardia Nacional Carreteras <strong>088</strong>).</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+
+        <!-- Firma inferior centrada -->
+        <footer class="brand-footer">
+          Desarrollado por <strong>Wonderpaz</strong>
+        </footer>
+      </div>
+    </section>
+  </div>
+
+  <!-- ==================== BARRA INFERIOR ==================== -->
+  <nav class="bottom-nav">
+    <button id="nav-mapa" class="nav-item active" onclick="switchTab('mapa')">
+      <svg class="icon" viewBox="0 0 24 24">
+        <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+        <line x1="8" y1="2" x2="8" y2="18"></line>
+        <line x1="16" y1="6" x2="16" y2="22"></line>
+      </svg>
+      Mapa
+    </button>
+
+    <button id="nav-perfil" class="nav-item" onclick="switchTab('perfil')">
+      <svg class="icon" viewBox="0 0 24 24">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>
+      Perfil
+    </button>
+
+    <button id="nav-ruta" class="nav-item" onclick="switchTab('ruta')">
+      <svg class="icon" viewBox="0 0 24 24">
+        <circle cx="6" cy="19" r="3"></circle>
+        <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+        <circle cx="18" cy="5" r="3"></circle>
+      </svg>
+      Ruta
+    </button>
+
+    <button id="nav-config" class="nav-item" onclick="switchTab('config')">
+      <svg class="icon" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+      Configuración
+    </button>
+  </nav>
+
+  <!-- ==================== MODALES ==================== -->
+  <!-- Modal Chequeo de Detención Anómala -->
+  <div id="modal-detencion" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 style="color:#f59e0b;">Detención prolongada detectada</h3>
+      </div>
+      <p class="muted" style="margin:0;">
+        Llevas varios minutos detenido en carretera con el rastreo activo. Confirma si todo está bien antes de que termine el conteo o se enviará una alerta ámbar automática a tu enlace de seguimiento.
+      </p>
+      <div id="detencion-countdown" class="countdown-num">60 s</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn btn-ok" onclick="confirmarTodoBien()">Todo bien, continuar viaje</button>
+        <button class="btn btn-danger" onclick="closeModal('modal-detencion'); openModal('modal-sos');">Necesito ayuda (SOS)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Reportar -->
+  <div id="modal-reporte" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-reporte')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Publicar aviso vial</h3>
+        <button class="icon-close" onclick="closeModal('modal-reporte')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="field">
+        <label>Tipo de incidencia</label>
+        <select id="rep-tipo" class="input">
+          <option value="ACCIDENTE">Accidente vial</option>
+          <option value="TRAFICO">Tráfico detenido</option>
+          <option value="BLOQUEO">Bloqueo carretero</option>
+          <option value="RETEN_SOSPECHOSO">Retén sospechoso</option>
+          <option value="ASALTO">Zona de riesgo / Asalto</option>
+          <option value="CIERRE">Cierre total de vía</option>
+          <option value="NEBLINA">Neblina densa</option>
+          <option value="LLUVIA_FUERTE">Lluvia fuerte / Inundación</option>
+          <option value="BACHE_PELIGROSO">Bache peligroso / Derrumbe</option>
+          <option value="OBRA">Obra en carretera</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Referencia breve (kilómetro o sentido)</label>
+        <input id="rep-desc" class="input" type="text" maxlength="200" placeholder="Ej. Carril izquierdo cerrado pasando la caseta" />
+      </div>
+      <button class="btn btn-primary" onclick="enviarReporte()">Enviar aviso en mi ubicación</button>
+    </div>
+  </div>
+
+  <!-- Modal Avisos -->
+  <div id="modal-avisos" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-avisos')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Avisos cercanos</h3>
+        <button class="icon-close" onclick="closeModal('modal-avisos')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div id="avisos-list" class="avisos-list"></div>
+    </div>
+  </div>
+
+  <!-- Modal Copiloto IA -->
+  <div id="modal-ia" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-ia')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Copiloto IA</h3>
+        <button class="icon-close" onclick="closeModal('modal-ia')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div id="ia-chat" class="chat-box">
+        <div class="msg bot">Listo para asistirte en carretera. Pregunta por paraderos, recomendaciones de seguridad o usa el micrófono.</div>
+      </div>
+      <div class="search-row">
+        <input id="ia-input" class="input" type="text" placeholder="Escribe o dicta tu consulta..." onkeydown="if(event.key==='Enter') enviarIA()" />
+        <button id="btn-mic-ia" class="btn" onclick="dictarIA()" title="Dictar por voz">
+          <svg class="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+          </svg>
+        </button>
+        <button class="btn btn-primary" onclick="enviarIA()">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Radio CB -->
+  <div id="modal-cb" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-cb')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Radio CB</h3>
+        <button class="icon-close" onclick="closeModal('modal-cb')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <p class="muted" style="margin:0;">
+        Comunicación por voz anónima sin exponer tu usuario ni coordenadas exactas. Deja vacío el campo para usar el Canal 19 público (radio de 20 km) o ingresa una clave de flotilla para canal privado.
+      </p>
+      <div class="field">
+        <label>Clave de canal privado (opcional, mínimo 4 caracteres)</label>
+        <input id="cb-clave" class="input" type="password" maxlength="40" placeholder="Vacío = Canal 19 público" onchange="onCBKeyChange()" />
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button id="btn-cb-ptt" class="btn btn-primary" style="flex:1;" onclick="toggleCBRecord()">Iniciar transmisión (máx. 10 s)</button>
+      </div>
+      <div id="cb-status" class="muted" style="font-size:12px;">Estado: en espera.</div>
+    </div>
+  </div>
+
+  <!-- Modal Paraderos -->
+  <div id="modal-paraderos" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-paraderos')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Paraderos y descanso</h3>
+        <button class="icon-close" onclick="closeModal('modal-paraderos')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="cargarParaderos(false)">Buscar cercanos</button>
+        <button class="btn btn-sm" onclick="cargarParaderos(true)">Solo pernocta</button>
+      </div>
+      <div style="padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
+        <strong style="font-size:13px;">Registrar paradero seguro en mi ubicación</strong>
+        <input id="par-nombre" class="input" type="text" placeholder="Nombre del paradero o gasolinera" maxlength="90" />
+        <div class="grid-2">
+          <select id="par-tipo" class="input">
+            <option value="PERNOCTA">Zona de pernocta</option>
+            <option value="PARADERO">Paradero</option>
+            <option value="GASOLINERA">Gasolinera iluminada</option>
+          </select>
+          <input id="par-notas" class="input" type="text" placeholder="Notas (ej. vigilancia 24h)" maxlength="180" />
+        </div>
+        <button class="btn btn-ok btn-sm" onclick="registrarParadero()">Guardar paradero</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal SOS -->
+  <div id="modal-sos" class="modal-backdrop" onclick="if(event.target===this) closeModal('modal-sos')">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 style="color:#ef4444;">Alerta de emergencia SOS</h3>
+        <button class="icon-close" onclick="closeModal('modal-sos')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <p class="muted" style="margin:0;">
+        Al confirmar se registrará el evento SOS, se marcará en rojo tu enlace de rastreo en vivo (si está activo) y se preparará el mensaje con tus coordenadas actuales.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn btn-danger" onclick="dispararSOS()">Activar alerta SOS ahora</button>
+        <a href="tel:911" class="btn">Llamar al 911</a>
+        <a href="tel:088" class="btn">Guardia Nacional Carreteras (088)</a>
+      </div>
+      <div id="sos-result" class="summary-box hidden"></div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // ESTADO GLOBAL
+    // =========================================================================
+    const DEFAULT_POS = [22.275, -97.862];
+    let map, tileLayer, userMarker, routeLine, destMarker;
+    let reportesLayer, paraderosLayer, riesgosLayer, sinSenalLayer;
+
+    let currentPos = { lat: DEFAULT_POS[0], lng: DEFAULT_POS[1], speedKmh: 0 };
+    let firstGpsFix = true;
+    let currentLimitKmh = null;
+    let authConfig = {
+      debug_mode: false,
+      google_client_id: "",
+      support_email: "copilotoseguromx@gmail.com",
+      autenticado: false,
+      perfil: null,
+      version: "1.2.0-alpha"
+    };
+
+    // Rutas, selección manual y recálculo automático
+    let currentRoutes = [];
+    let selectedRoute = null;
+    let activeDestination = null;
+    let pickDestMode = false;
+    let lastRerouteTs = 0;
+    let rerouteInFlight = false;
+
+    // Rastreo en vivo y monitor de detención anómala
+    let trackingCode = null;
+    let trackingTimer = null;
+    let stallMonitorTimer = null;
+    let lastMovePos = null;
+    let lastMoveTs = Date.now();
+    let stallPromptActive = false;
+    let stallAlertSent = false;
+    let stallCountdownSec = 60;
+    let stallCountdownTimer = null;
+
+    // Screen Wake Lock (Android / pantalla siempre encendida)
+    let wakeLockSentinel = null;
+
+    // Radio CB
+    let cbListening = false;
+    let cbPollTimer = null;
+    let cbLastId = 0;
+    let cbRecorder = null;
+    let cbChunks = [];
+    let cbRecording = false;
+    let cbStopTimeout = null;
+
+    // Audio TTS
+    let currentAudio = null;
+
+    // Preferencias locales
+    const SETTINGS_KEY = "copiloto_mx_settings_v4";
+    let settings = {
+      dark: false,
+      cabin: false,
+      tts: true,
+      voz: "es-MX-DaliaNeural",
+      velocidad: 0,
+      tono: 0,
+      sinSenal: true,
+      pesados: true,
+      detencion: true,
+      recalculo: true,
+      wakeLock: true
+    };
+
+    const FALLBACK_VOCES = [
+      { id: "es-MX-DaliaNeural", nombre: "Dalia (México · Femenina)" },
+      { id: "es-MX-JorgeNeural", nombre: "Jorge (México · Masculina)" },
+      { id: "es-MX-BeatrizNeural", nombre: "Beatriz (México · Femenina)" },
+      { id: "es-MX-CandelaNeural", nombre: "Candela (México · Femenina)" },
+      { id: "es-MX-CarlotaNeural", nombre: "Carlota (México · Femenina)" },
+      { id: "es-MX-CecilioNeural", nombre: "Cecilio (México · Masculina)" },
+      { id: "es-MX-GerardoNeural", nombre: "Gerardo (México · Masculina)" },
+      { id: "es-MX-LarissaNeural", nombre: "Larissa (México · Femenina)" },
+      { id: "es-MX-LucianoNeural", nombre: "Luciano (México · Masculina)" },
+      { id: "es-MX-MarinaNeural", nombre: "Marina (México · Femenina)" },
+      { id: "es-MX-RenataNeural", nombre: "Renata (México · Femenina)" },
+      { id: "es-MX-YagoNeural", nombre: "Yago (México · Masculina)" }
+    ];
+
+    // =========================================================================
+    // UTILIDADES UI, WAKE LOCK Y GEOMETRÍA
+    // =========================================================================
+    function showToast(msg, ms = 3200) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.remove("show"), ms);
+    }
+
+    function openModal(id) {
+      document.getElementById(id).classList.add("open");
+      if (id === "modal-avisos") loadReportes();
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.remove("open");
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+      document.getElementById(`view-${tab}`).classList.add("active");
+      document.getElementById(`nav-${tab}`).classList.add("active");
+      if (tab === "mapa" && map) {
+        setTimeout(() => map.invalidateSize(), 60);
+      }
+    }
+
+    async function syncWakeLock() {
+      if (!("wakeLock" in navigator)) return;
+      try {
+        if (settings.wakeLock) {
+          if (!wakeLockSentinel) {
+            wakeLockSentinel = await navigator.wakeLock.request("screen");
+            wakeLockSentinel.addEventListener("release", () => { wakeLockSentinel = null; });
+          }
+        } else if (wakeLockSentinel) {
+          await wakeLockSentinel.release();
+          wakeLockSentinel = null;
+        }
+      } catch (_) {}
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && settings.wakeLock) {
+        syncWakeLock();
+      }
+    });
+
+    function formatDuration(mins) {
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      return h > 0 ? `${h} h ${m} min` : `${m} min`;
+    }
+
+    function formatETA(mins) {
+      const d = new Date(Date.now() + mins * 60000);
+      return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", hour12: true });
+    }
+
+    function haversineMeters(lat1, lng1, lat2, lng2) {
+      const R = 6371000;
+      const toRad = x => x * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+    }
+
+    function minDistToRouteMeters(lat, lng, coords) {
+      if (!coords || !coords.length) return 0;
+      const step = Math.max(1, Math.floor(coords.length / 260));
+      let best = Infinity;
+      for (let i = 0; i < coords.length; i += step) {
+        const d = haversineMeters(lat, lng, coords[i][0], coords[i][1]);
+        if (d < best) best = d;
+      }
+      const last = coords[coords.length - 1];
+      const dLast = haversineMeters(lat, lng, last[0], last[1]);
+      return Math.min(best, dLast);
+    }
+
+    function calcularProgresoRuta() {
+      if (!selectedRoute || !selectedRoute.coords || selectedRoute.coords.length < 2) {
+        return null;
+      }
+      const coords = selectedRoute.coords;
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < coords.length; i++) {
+        const d = haversineMeters(currentPos.lat, currentPos.lng, coords[i][0], coords[i][1]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+
+      let remMeters = 0;
+      for (let i = bestIdx; i < coords.length - 1; i++) {
+        remMeters += haversineMeters(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
+      }
+
+      const distAlFinal = haversineMeters(
+        currentPos.lat,
+        currentPos.lng,
+        coords[coords.length - 1][0],
+        coords[coords.length - 1][1]
+      );
+      if (distAlFinal <= 60) {
+        return { llegado: true, remKm: 0, remMin: 0 };
+      }
+
+      const remKm = Math.round((remMeters / 1000) * 10) / 10;
+      const ratio = Math.min(1, remKm / Math.max(selectedRoute.distancia_km, 0.1));
+      const remMin = Math.max(1, Math.round(selectedRoute.duracion_min * ratio));
+      return { llegado: false, remKm, remMin };
+    }
+
+    function actualizarHudRuta() {
+      if (!selectedRoute) return;
+      const prog = calcularProgresoRuta();
+      if (!prog) return;
+
+      if (prog.llegado) {
+        document.getElementById("hud-eta").textContent = "Llegaste";
+        document.getElementById("hud-dist").textContent = `0.0 km restantes (${selectedRoute.tipo})`;
+        return;
+      }
+
+      document.getElementById("hud-eta").textContent = formatETA(prog.remMin);
+      document.getElementById("hud-dist").textContent = `${prog.remKm} km restantes (${selectedRoute.tipo})`;
+    }
+
+    // =========================================================================
+    // TEMA OSCURO Y MODO CABINA
+    // =========================================================================
+    function setDarkMode(on) {
+      settings.dark = !!on;
+      document.body.classList.toggle("dark", settings.dark);
+      document.getElementById("cfg-dark").checked = settings.dark;
+      document.getElementById("btn-theme-map").classList.toggle("active", settings.dark);
+
+      const icon = document.getElementById("icon-theme-map");
+      if (settings.dark) {
+        icon.innerHTML = '<circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>';
+      } else {
+        icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+      }
+      saveSettings();
+    }
+
+    function toggleDarkMode() { setDarkMode(!settings.dark); }
+
+    function setCabinMode(on) {
+      settings.cabin = !!on;
+      document.body.classList.toggle("cabin-mode", settings.cabin);
+      document.getElementById("cfg-cabin").checked = settings.cabin;
+      document.getElementById("btn-cabin-map").classList.toggle("active", settings.cabin);
+      saveSettings();
+    }
+
+    function toggleCabinMode() {
+      setCabinMode(!settings.cabin);
+      showToast(settings.cabin ? "Modo Cabina activado" : "Modo Cabina desactivado");
+    }
+
+    // =========================================================================
+    // CONFIGURACIÓN Y VOCES
+    // =========================================================================
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (raw) Object.assign(settings, JSON.parse(raw));
+      } catch (_) {}
+      document.getElementById("cfg-tts").checked = settings.tts;
+      document.getElementById("cfg-sin-senal").checked = settings.sinSenal;
+      document.getElementById("cfg-pesados").checked = settings.pesados;
+      document.getElementById("cfg-detencion").checked = settings.detencion;
+      document.getElementById("cfg-recalculo").checked = settings.recalculo;
+      document.getElementById("cfg-wakelock").checked = settings.wakeLock;
+      document.getElementById("cfg-velocidad").value = settings.velocidad;
+      document.getElementById("cfg-tono").value = settings.tono;
+      document.getElementById("cfg-cb").checked = false;
+      updateVoiceLabels();
+      setDarkMode(settings.dark);
+      setCabinMode(settings.cabin);
+      syncWakeLock();
+    }
+
+    function saveSettings() {
+      settings.tts = document.getElementById("cfg-tts").checked;
+      settings.sinSenal = document.getElementById("cfg-sin-senal").checked;
+      settings.pesados = document.getElementById("cfg-pesados").checked;
+      settings.detencion = document.getElementById("cfg-detencion").checked;
+      settings.recalculo = document.getElementById("cfg-recalculo").checked;
+      settings.wakeLock = document.getElementById("cfg-wakelock").checked;
+      const vozSel = document.getElementById("cfg-voz");
+      if (vozSel && vozSel.value) settings.voz = vozSel.value;
+      settings.velocidad = parseInt(document.getElementById("cfg-velocidad").value || "0", 10);
+      settings.tono = parseInt(document.getElementById("cfg-tono").value || "0", 10);
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+    }
+
+    function updateVoiceLabels() {
+      const vel = parseInt(document.getElementById("cfg-velocidad").value || "0", 10);
+      const tono = parseInt(document.getElementById("cfg-tono").value || "0", 10);
+      document.getElementById("lbl-velocidad").textContent = vel === 0 ? "Normal (0%)" : `${vel > 0 ? "+" : ""}${vel}%`;
+      document.getElementById("lbl-tono").textContent = tono === 0 ? "Natural (0 Hz)" : `${tono > 0 ? "+" : ""}${tono} Hz`;
+    }
+
+    function resetVoiceSettings() {
+      document.getElementById("cfg-voz").value = "es-MX-DaliaNeural";
+      document.getElementById("cfg-velocidad").value = 0;
+      document.getElementById("cfg-tono").value = 0;
+      updateVoiceLabels();
+      saveSettings();
+      showToast("Voz restablecida a valores predeterminados");
+    }
+
+    async function loadVoices() {
+      let voces = FALLBACK_VOCES;
+      try {
+        const r = await fetch("/tts/voces");
+        if (r.ok) {
+          const d = await r.json();
+          if (Array.isArray(d.voces) && d.voces.length) voces = d.voces;
+        }
+      } catch (_) {}
+      const sel = document.getElementById("cfg-voz");
+      sel.innerHTML = voces.map(v => `<option value="${v.id}">${v.nombre}</option>`).join("");
+      sel.value = voces.some(v => v.id === settings.voz) ? settings.voz : voces[0].id;
+    }
+
+    async function speakTTS(texto, force = false) {
+      if (!force && !settings.tts) return;
+      try {
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+        const r = await fetch("/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            texto,
+            voz: settings.voz,
+            velocidad: settings.velocidad,
+            tono: settings.tono
+          })
+        });
+        if (!r.ok) return;
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        currentAudio = new Audio(url);
+        currentAudio.onended = () => URL.revokeObjectURL(url);
+        await currentAudio.play();
+      } catch (_) {}
+    }
+
+    function probarVoz() {
+      saveSettings();
+      speakTTS("Copiloto Seguro México en línea. Buen viaje y maneja con precaución.", true);
+    }
+
+    // =========================================================================
+    // MENSAJES, SUGERENCIAS Y ATENCIÓN AL CLIENTE
+    // =========================================================================
+    async function enviarMensajeSoporte() {
+      const categoria = document.getElementById("sop-cat").value;
+      const correo_contacto = document.getElementById("sop-correo").value.trim();
+      const asunto = document.getElementById("sop-asunto").value.trim();
+      const mensaje = document.getElementById("sop-mensaje").value.trim();
+      const statusBox = document.getElementById("sop-status");
+      const btn = document.getElementById("btn-enviar-soporte");
+
+      if (asunto.length < 3) return showToast("Escribe un asunto de al menos 3 caracteres");
+      if (mensaje.length < 8) return showToast("Escribe un mensaje un poco más detallado");
+
+      btn.disabled = true;
+      btn.textContent = "Enviando...";
+      statusBox.classList.add("hidden");
+
+      try {
+        const r = await fetch("/soporte/mensaje", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ categoria, correo_contacto, asunto, mensaje })
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          showToast(d.detail || "No se pudo enviar el mensaje");
+          return;
+        }
+        document.getElementById("sop-asunto").value = "";
+        document.getElementById("sop-mensaje").value = "";
+        statusBox.textContent = d.enviado_correo
+          ? `Mensaje #${d.id} enviado correctamente a ${d.destino}. Gracias por escribirnos.`
+          : `Mensaje #${d.id} guardado en nuestro sistema. El equipo lo revisará a la brevedad.`;
+        statusBox.classList.remove("hidden");
+        showToast("Mensaje enviado correctamente");
+      } catch (_) {
+        showToast("Error de conexión al enviar el mensaje");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Enviar mensaje";
+      }
+    }
+
+    // =========================================================================
+    // MAPA, SELECCIÓN MANUAL (1 CLIC) Y GPS + RECÁLCULO AUTOMÁTICO
+    // =========================================================================
+    function initMap() {
+      map = L.map("map", { zoomControl: false }).setView(DEFAULT_POS, 13);
+      tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 19
+      }).addTo(map);
+
+      reportesLayer = L.layerGroup().addTo(map);
+      paraderosLayer = L.layerGroup().addTo(map);
+      riesgosLayer = L.layerGroup().addTo(map);
+      sinSenalLayer = L.layerGroup().addTo(map);
+
+      userMarker = L.circleMarker(DEFAULT_POS, {
+        radius: 8,
+        color: "#ffffff",
+        weight: 3,
+        fillColor: "#2563eb",
+        fillOpacity: 1
+      }).addTo(map);
+
+      map.on("click", async e => {
+        if (!pickDestMode) return;
+        togglePickDestination(false);
+        const dest = {
+          nombre: `Punto en mapa (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`,
+          lat: e.latlng.lat,
+          lng: e.latlng.lng
+        };
+        showToast("Trazando ruta al punto seleccionado...");
+        await calcularRutas(dest, true);
+      });
+
+      startGPS();
+      loadClima();
+      loadReportes();
+      loadZonasSinSenal();
+      loadRiesgosPesados();
+
+      setInterval(actualizarHudRuta, 10000);
+      setInterval(loadReportes, 45000);
+      setInterval(loadClima, 300000);
+      setInterval(loadLimiteVelocidad, 30000);
+    }
+
+    function togglePickDestination(forceState) {
+      pickDestMode = typeof forceState === "boolean" ? forceState : !pickDestMode;
+      document.getElementById("btn-pick-dest").classList.toggle("active", pickDestMode);
+      document.getElementById("pick-banner").classList.toggle("show", pickDestMode);
+      document.getElementById("map").classList.toggle("pick-mode", pickDestMode);
+      if (pickDestMode && map) map.closePopup();
+    }
+
+    function startGPS() {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.watchPosition(
+        pos => {
+          currentPos.lat = pos.coords.latitude;
+          currentPos.lng = pos.coords.longitude;
+          const spd = pos.coords.speed != null && !isNaN(pos.coords.speed) ? Math.max(0, Math.round(pos.coords.speed * 3.6)) : 0;
+          currentPos.speedKmh = spd;
+
+          userMarker.setLatLng([currentPos.lat, currentPos.lng]);
+          if (firstGpsFix) {
+            firstGpsFix = false;
+            lastMovePos = { lat: currentPos.lat, lng: currentPos.lng };
+            lastMoveTs = Date.now();
+            map.setView([currentPos.lat, currentPos.lng], 13);
+            loadClima();
+            loadReportes();
+            loadLimiteVelocidad();
+            loadRiesgosPesados();
+          }
+
+          if (!lastMovePos || haversineMeters(lastMovePos.lat, lastMovePos.lng, currentPos.lat, currentPos.lng) > 35 || spd >= 6) {
+            lastMovePos = { lat: currentPos.lat, lng: currentPos.lng };
+            lastMoveTs = Date.now();
+            if (stallAlertSent && trackingCode) {
+              stallAlertSent = false;
+              enviarEstadoDetencion(false);
+            }
+          }
+
+          document.getElementById("hud-speed").textContent = String(spd);
+          const over = currentLimitKmh && spd > currentLimitKmh + 5;
+          document.getElementById("hud-speed-box").classList.toggle("over", !!over);
+
+          actualizarHudRuta();
+          verificarDesvioYRecalcular();
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
+    }
+
+    async function verificarDesvioYRecalcular() {
+      if (!settings.recalculo || !selectedRoute || !activeDestination || rerouteInFlight) return;
+      if (Date.now() - lastRerouteTs < 25000) return;
+
+      const distM = minDistToRouteMeters(currentPos.lat, currentPos.lng, selectedRoute.coords);
+      if (distM <= 250) return;
+
+      rerouteInFlight = true;
+      lastRerouteTs = Date.now();
+      const prefTipo = selectedRoute.tipo;
+      showToast("Desvío detectado · Recalculando ruta...");
+      speakTTS("Recalculando ruta.");
+
+      try {
+        const r = await fetch("/rutas/comparar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            origen_lat: currentPos.lat,
+            origen_lng: currentPos.lng,
+            destino_lat: activeDestination.lat,
+            destino_lng: activeDestination.lng
+          })
+        });
+        if (r.ok) {
+          const d = await r.json();
+          const nuevas = d.rutas || [];
+          if (nuevas.length) {
+            currentRoutes = nuevas;
+            renderRouteCards(activeDestination);
+            const idx = Math.max(0, nuevas.findIndex(x => x.tipo === prefTipo));
+            seleccionarRuta(idx, activeDestination, true);
+          }
+        }
+      } catch (_) {
+      } finally {
+        rerouteInFlight = false;
+      }
+    }
+
+    function centerOnUser() {
+      if (map) map.setView([currentPos.lat, currentPos.lng], 14);
+    }
+
+    async function loadClima() {
+      try {
+        const r = await fetch(`/clima?lat=${currentPos.lat}&lng=${currentPos.lng}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.temp_c != null) {
+          document.getElementById("hud-clima").textContent = `${Math.round(d.temp_c)}°C · Viento ${Math.round(d.viento_kmh || 0)} km/h`;
+        }
+      } catch (_) {}
+    }
+
+    async function loadLimiteVelocidad() {
+      try {
+        const r = await fetch(`/limite-velocidad?lat=${currentPos.lat}&lng=${currentPos.lng}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        currentLimitKmh = d.limite_kmh;
+        document.getElementById("hud-limit").textContent = d.limite_kmh ? String(d.limite_kmh) : "--";
+      } catch (_) {}
+    }
+
+    async function loadRiesgosPesados() {
+      riesgosLayer.clearLayers();
+      if (!settings.pesados) return;
+      try {
+        const r = await fetch(`/riesgos-pesados?lat=${currentPos.lat}&lng=${currentPos.lng}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        for (const item of d.riesgos || []) {
+          L.circleMarker([item.lat, item.lng], {
+            radius: 6,
+            color: "#f59e0b",
+            weight: 2,
+            fillColor: "#f59e0b",
+            fillOpacity: 0.75
+          }).bindPopup(`<strong>${item.tipo === "PUENTE_BAJO" ? "Puente bajo" : "Pendiente"}</strong><br/>${item.detalle}`).addTo(riesgosLayer);
+        }
+      } catch (_) {}
+    }
+
+    async function loadZonasSinSenal() {
+      sinSenalLayer.clearLayers();
+      try {
+        const r = await fetch(`/zonas-sin-senal?lat=${currentPos.lat}&lng=${currentPos.lng}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        for (const z of d.zonas || []) {
+          L.circle([z.lat, z.lng], {
+            radius: z.radio_m || 650,
+            color: "#64748b",
+            weight: 1,
+            dashArray: "4 4",
+            fillColor: "#64748b",
+            fillOpacity: 0.12,
+            interactive: false
+          }).addTo(sinSenalLayer);
+        }
+      } catch (_) {}
+    }
+
+    window.addEventListener("offline", () => {
+      if (!settings.sinSenal) return;
+      try { localStorage.setItem("pending_dead_zone", JSON.stringify({ lat: currentPos.lat, lng: currentPos.lng })); } catch (_) {}
+    });
+
+    window.addEventListener("online", async () => {
+      if (!settings.sinSenal) return;
+      const raw = localStorage.getItem("pending_dead_zone");
+      if (!raw) return;
+      localStorage.removeItem("pending_dead_zone");
+      try {
+        const pt = JSON.parse(raw);
+        await fetch("/zonas-sin-senal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: pt.lat, lng: pt.lng, recuperada: false })
+        });
+        loadZonasSinSenal();
+      } catch (_) {}
+    });
+
+    // =========================================================================
+    // AUTENTICACIÓN Y PERFIL
+    // =========================================================================
+    async function loadAuthConfig() {
+      try {
+        const r = await fetch("/auth/config");
+        if (!r.ok) return;
+        authConfig = await r.json();
+        if (authConfig.version) {
+          document.getElementById("app-version-badge").textContent = `v${authConfig.version}`;
+        }
+        if (authConfig.support_email) {
+          document.getElementById("sop-email-dest").textContent = authConfig.support_email;
+          const mLink = document.getElementById("sop-mailto-link");
+          mLink.href = `mailto:${authConfig.support_email}`;
+          mLink.textContent = authConfig.support_email;
+        }
+        renderAuthUI();
+      } catch (_) {}
+    }
+
+    function renderAuthUI() {
+      const authBox = document.getElementById("auth-box");
+      const perfilBox = document.getElementById("perfil-content");
+      const devBox = document.getElementById("dev-auth-box");
+      const noGoogle = document.getElementById("google-no-id");
+
+      devBox.classList.toggle("hidden", !authConfig.debug_mode);
+
+      if (authConfig.autenticado && authConfig.perfil) {
+        authBox.classList.add("hidden");
+        perfilBox.classList.remove("hidden");
+        fillPerfilForm(authConfig.perfil);
+        const sopCorreo = document.getElementById("sop-correo");
+        if (sopCorreo && !sopCorreo.value && authConfig.perfil.email) {
+          sopCorreo.value = authConfig.perfil.email;
+        }
+      } else {
+        authBox.classList.remove("hidden");
+        perfilBox.classList.add("hidden");
+        document.getElementById("fuel-pill").classList.add("hidden");
+
+        if (authConfig.google_client_id) {
+          noGoogle.classList.add("hidden");
+          initGoogleSignIn(authConfig.google_client_id);
+        } else {
+          noGoogle.classList.remove("hidden");
+        }
+      }
+    }
+
+    function initGoogleSignIn(clientId, retries = 12) {
+      const container = document.getElementById("google-btn-container");
+      if (!window.google || !google.accounts || !google.accounts.id) {
+        if (retries > 0) setTimeout(() => initGoogleSignIn(clientId, retries - 1), 350);
+        return;
+      }
+      container.innerHTML = "";
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async resp => {
+          try {
+            const r = await fetch("/auth/google", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_token: resp.credential })
+            });
+            const d = await r.json();
+            if (!r.ok) return showToast(d.detail || "No se pudo iniciar sesión con Google");
+            authConfig.autenticado = true;
+            authConfig.perfil = d.perfil;
+            renderAuthUI();
+            showToast(d.perfil.requiere_username ? "Sesión iniciada. Elige tu nombre de usuario único." : "Sesión iniciada correctamente");
+          } catch (_) {
+            showToast("Error de conexión al validar con Google");
+          }
+        }
+      });
+      google.accounts.id.renderButton(container, {
+        theme: settings.dark ? "filled_black" : "outline",
+        size: "large",
+        shape: "pill",
+        text: "signin_with",
+        locale: "es"
+      });
+    }
+
+    async function loginDev() {
+      const email = document.getElementById("dev-email").value.trim();
+      const nombre_real = document.getElementById("dev-name").value.trim();
+      try {
+        const r = await fetch("/auth/dev", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, nombre_real })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "Error al iniciar sesión");
+        authConfig.autenticado = true;
+        authConfig.perfil = d.perfil;
+        renderAuthUI();
+        showToast("Sesión local iniciada");
+      } catch (_) {
+        showToast("Error de conexión con el servidor");
+      }
+    }
+
+    async function logout() {
+      try { await fetch("/auth/logout", { method: "POST" }); } catch (_) {}
+      authConfig.autenticado = false;
+      authConfig.perfil = null;
+      renderAuthUI();
+      showToast("Sesión cerrada");
+    }
+
+    function fillPerfilForm(p) {
+      document.getElementById("badge-username").textContent = p.username ? `@${p.username}` : "Elige tu @usuario";
+      document.getElementById("perfil-email").textContent = p.email || "";
+      document.getElementById("badge-rep").textContent = `Rep: ${p.reputacion ?? 1}`;
+
+      document.getElementById("p-nombre").value = p.nombre_real || "";
+      const uInput = document.getElementById("p-username");
+      const uHint = document.getElementById("p-username-hint");
+      uInput.value = p.username || "";
+
+      if (p.username && !p.puede_cambiar_username && p.proximo_cambio_username_mx) {
+        uInput.disabled = true;
+        uHint.textContent = `Cámbialo de nuevo en 6 meses (${p.proximo_cambio_username_mx})`;
+      } else {
+        uInput.disabled = false;
+        uHint.textContent = "Solo letras, números, guion o guion bajo.";
+      }
+
+      document.getElementById("p-vehiculo").value = p.tipo_vehiculo || "auto";
+      document.getElementById("p-altura").value = p.altura_m ?? 1.8;
+      document.getElementById("p-peso").value = p.peso_t ?? 2.0;
+      document.getElementById("p-comb").value = p.tipo_combustible || "magna";
+      document.getElementById("p-precio").value = p.precio_litro ?? 24.5;
+      document.getElementById("p-rend").value = p.rendimiento_kml ?? 12.0;
+      document.getElementById("p-cap").value = p.capacidad_tanque ?? 55.0;
+      document.getElementById("p-litros").value = p.litros_actuales ?? 40.0;
+      document.getElementById("p-pildora").checked = !!p.mostrar_pildora_combustible;
+      document.getElementById("p-sos-nombre").value = p.contacto_emergencia_nombre || "";
+      document.getElementById("p-sos-tel").value = p.contacto_emergencia_tel || "";
+      document.getElementById("p-sos-frase").value = "";
+      document.getElementById("p-sos-estado").textContent = p.tiene_frase_sos
+        ? "Frase clave SOS configurada. Escribe una nueva solo si deseas reemplazarla."
+        : "Sin frase clave SOS configurada.";
+
+      updateFuelSummary();
+    }
+
+    function onVehiculoPreset() {
+      const v = document.getElementById("p-vehiculo").value;
+      if (v === "auto") {
+        document.getElementById("p-altura").value = 1.8;
+        document.getElementById("p-peso").value = 2.0;
+      } else if (v === "camion") {
+        document.getElementById("p-altura").value = 3.5;
+        document.getElementById("p-peso").value = 12.0;
+      } else if (v === "trailer") {
+        document.getElementById("p-altura").value = 4.2;
+        document.getElementById("p-peso").value = 32.0;
+      }
+    }
+
+    function updateFuelSummary() {
+      const precio = parseFloat(document.getElementById("p-precio").value || "24.5");
+      const rend = parseFloat(document.getElementById("p-rend").value || "12");
+      const cap = parseFloat(document.getElementById("p-cap").value || "55");
+      const litros = parseFloat(document.getElementById("p-litros").value || "40");
+      const showPill = document.getElementById("p-pildora").checked;
+
+      const autoKm = Math.max(0, Math.round(litros * rend));
+      const faltan = Math.max(0, Math.round((cap - litros) * 10) / 10);
+      const costoLlenar = Math.round(faltan * precio);
+
+      document.getElementById("fuel-summary").textContent =
+        `Autonomía estimada: ~${autoKm} km · Te faltan ${faltan} L para llenar (~$${costoLlenar} MXN).`;
+
+      const pill = document.getElementById("fuel-pill");
+      document.getElementById("fuel-pill-text").textContent = `~${autoKm} km (${Math.round(litros)} L)`;
+      pill.classList.toggle("hidden", !showPill || !authConfig.autenticado);
+      pill.classList.toggle("low", autoKm < 90);
+    }
+
+    async function guardarPerfil() {
+      const payload = {
+        nombre_real: document.getElementById("p-nombre").value.trim(),
+        tipo_vehiculo: document.getElementById("p-vehiculo").value,
+        altura_m: parseFloat(document.getElementById("p-altura").value),
+        peso_t: parseFloat(document.getElementById("p-peso").value),
+        tipo_combustible: document.getElementById("p-comb").value,
+        precio_litro: parseFloat(document.getElementById("p-precio").value),
+        rendimiento_kml: parseFloat(document.getElementById("p-rend").value),
+        capacidad_tanque: parseFloat(document.getElementById("p-cap").value),
+        litros_actuales: parseFloat(document.getElementById("p-litros").value),
+        mostrar_pildora_combustible: document.getElementById("p-pildora").checked,
+        contacto_emergencia_nombre: document.getElementById("p-sos-nombre").value.trim(),
+        contacto_emergencia_tel: document.getElementById("p-sos-tel").value.trim()
+      };
+
+      const uInput = document.getElementById("p-username");
+      if (!uInput.disabled && uInput.value.trim()) payload.username = uInput.value.trim();
+      const frase = document.getElementById("p-sos-frase").value.trim();
+      if (frase) payload.frase_sos = frase;
+
+      try {
+        const r = await fetch("/perfil", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo guardar el perfil");
+        authConfig.perfil = d;
+        fillPerfilForm(d);
+        showToast("Perfil actualizado correctamente");
+      } catch (_) {
+        showToast("Error de conexión al guardar perfil");
+      }
+    }
+
+    // =========================================================================
+    // REPORTES COMUNITARIOS
+    // =========================================================================
+    async function loadReportes() {
+      try {
+        const r = await fetch(`/reportes?lat=${currentPos.lat}&lng=${currentPos.lng}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        const list = d.reportes || [];
+        document.getElementById("avisos-count").textContent = String(list.length);
+
+        reportesLayer.clearLayers();
+        const container = document.getElementById("avisos-list");
+        if (!list.length) {
+          container.innerHTML = '<div class="muted">No hay avisos activos en un radio de 90 km.</div>';
+          return;
+        }
+
+        container.innerHTML = "";
+        for (const rep of list) {
+          const col = rep.gravedad === "CRITICO" ? "#ef4444" : (rep.gravedad === "ALTO" ? "#f97316" : "#eab308");
+          L.circleMarker([rep.lat, rep.lng], {
+            radius: 7,
+            color: "#ffffff",
+            weight: 2,
+            fillColor: col,
+            fillOpacity: 0.95
+          }).bindPopup(`<strong>${rep.tipo.replace(/_/g, " ")}</strong><br/>${rep.descripcion}<br/><small>A ${rep.distancia_km} km · Confirmaciones: ${rep.confirmaciones}</small>`).addTo(reportesLayer);
+
+          const div = document.createElement("div");
+          div.className = "aviso-item";
+          const badgeClass = rep.gravedad === "CRITICO" ? "danger" : (rep.gravedad === "ALTO" ? "warn" : "ok");
+          div.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <strong>${rep.tipo.replace(/_/g, " ")}</strong>
+              <span class="badge ${badgeClass}">${rep.gravedad} · ${rep.distancia_km} km</span>
+            </div>
+            <div class="muted">${rep.descripcion}</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn btn-sm" onclick="votarReporte(${rep.id}, 'confirmar')">Confirmar (${rep.confirmaciones})</button>
+              <button class="btn btn-sm" onclick="votarReporte(${rep.id}, 'despejar')">Ya despejó (${rep.votos_despejar}/${rep.despejar_requeridos})</button>
+              <button class="btn btn-sm" onclick="verEnMapa(${rep.lat}, ${rep.lng})">Ver en mapa</button>
+            </div>
+          `;
+          container.appendChild(div);
+        }
+      } catch (_) {}
+    }
+
+    function verEnMapa(lat, lng) {
+      closeModal("modal-avisos");
+      switchTab("mapa");
+      map.setView([lat, lng], 14);
+    }
+
+    async function enviarReporte() {
+      const tipo = document.getElementById("rep-tipo").value;
+      const descripcion = document.getElementById("rep-desc").value.trim();
+      try {
+        const r = await fetch("/reportes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tipo, descripcion, lat: currentPos.lat, lng: currentPos.lng })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo publicar el aviso");
+        document.getElementById("rep-desc").value = "";
+        closeModal("modal-reporte");
+        loadReportes();
+        showToast(d.estado === "EN_REVISION" ? "Aviso crítico enviado a validación comunitaria" : "Aviso publicado en el mapa");
+      } catch (_) {
+        showToast("Error de conexión al publicar aviso");
+      }
+    }
+
+    async function votarReporte(id, accion) {
+      try {
+        const r = await fetch(`/reportes/${id}/${accion}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: currentPos.lat, lng: currentPos.lng })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo registrar tu voto");
+        loadReportes();
+        showToast(accion === "confirmar" ? "Aviso confirmado" : (d.despejado ? "Aviso marcado como despejado" : "Voto de despeje registrado"));
+      } catch (_) {
+        showToast("Error al enviar voto");
+      }
+    }
+
+    // =========================================================================
+    // BUSCADOR, COMPARADOR DE RUTAS Y SEMÁFORO DE HORARIO SEGURO
+    // =========================================================================
+    async function buscarLugar() {
+      const q = document.getElementById("ruta-query").value.trim();
+      if (q.length < 2) return showToast("Escribe al menos 2 caracteres para buscar");
+      const listEl = document.getElementById("ruta-resultados");
+      listEl.innerHTML = '<div class="muted">Buscando ubicaciones...</div>';
+      document.getElementById("ruta-opciones").innerHTML = "";
+
+      try {
+        const r = await fetch(`/buscar-lugar?q=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        if (!r.ok) {
+          listEl.innerHTML = `<div class="muted">${d.detail || "No se pudo realizar la búsqueda."}</div>`;
+          return;
+        }
+        const res = d.resultados || [];
+        if (!res.length) {
+          listEl.innerHTML = '<div class="muted">No se encontraron resultados en México para esa búsqueda.</div>';
+          return;
+        }
+        listEl.innerHTML = "";
+        for (const item of res) {
+          const btn = document.createElement("button");
+          btn.className = "place-item";
+          btn.innerHTML = `
+            <span class="place-tag">${item.etiqueta || "Ubicación"}</span>
+            <span style="font-size:13px; font-weight:600;">${item.nombre}</span>
+          `;
+          btn.onclick = () => calcularRutas(item, false);
+          listEl.appendChild(btn);
+        }
+      } catch (_) {
+        listEl.innerHTML = '<div class="muted">Error de conexión con el buscador.</div>';
+      }
+    }
+
+    async function calcularRutas(destino, autoSelectFirst = false) {
+      activeDestination = destino;
+      const optsEl = document.getElementById("ruta-opciones");
+      optsEl.innerHTML = '<div class="muted">Calculando opciones de ruta...</div>';
+
+      try {
+        const r = await fetch("/rutas/comparar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            origen_lat: currentPos.lat,
+            origen_lng: currentPos.lng,
+            destino_lat: destino.lat,
+            destino_lng: destino.lng
+          })
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          optsEl.innerHTML = `<div class="muted">${d.detail || "No se pudo trazar la ruta."}</div>`;
+          showToast(d.detail || "No se pudo trazar la ruta");
+          return;
+        }
+        currentRoutes = d.rutas || [];
+        if (!currentRoutes.length) {
+          optsEl.innerHTML = '<div class="muted">No se encontró una ruta pavimentada disponible.</div>';
+          return;
+        }
+
+        renderRouteCards(destino);
+        if (autoSelectFirst) {
+          seleccionarRuta(0, destino, false);
+        }
+      } catch (_) {
+        optsEl.innerHTML = '<div class="muted">Error de conexión al calcular la ruta.</div>';
+        showToast("Error de conexión al calcular la ruta");
+      }
+    }
+
+    function renderRouteCards(destino) {
+      const optsEl = document.getElementById("ruta-opciones");
+      optsEl.innerHTML = "";
+      const titulos = {
+        cuota: "Ruta de Cuota",
+        libre: "Ruta Libre",
+        directa: "Ruta Directa",
+        alterna: "Ruta Alterna"
+      };
+
+      currentRoutes.forEach((rt, idx) => {
+        const card = document.createElement("div");
+        card.className = "route-card";
+        const semColor = rt.semaforo_color || "VERDE";
+        const semBadgeCls = semColor === "ROJO" ? "danger" : (semColor === "AMARILLO" ? "warn" : "ok");
+        const tanqueTxt = rt.autonomia_suficiente ? "Alcanza tu tanque" : "Requiere recarga en ruta";
+        const casetasTxt = rt.tiene_peaje ? `Casetas ~$${rt.costo_casetas_aprox}` : "Sin casetas";
+
+        card.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <strong>${titulos[rt.tipo] || "Ruta"}</strong>
+            <span class="badge ${semBadgeCls}">Semáforo ${semColor}</span>
+          </div>
+          <div style="font-size:18px; font-weight:800;">${rt.distancia_km} km · ${formatDuration(rt.duracion_min)}</div>
+          <div class="muted">${casetasTxt} · Combustible ~$${rt.costo_combustible_aprox} (${rt.litros_estimados} L) · Total ~$${rt.costo_total_aprox} MXN</div>
+          <div class="muted">Alertas en ruta: ${rt.alertas_ruta} · Tramos sin señal: ${rt.zonas_sin_senal} · ${tanqueTxt}</div>
+          <div class="semaforo-box ${semColor}">
+            ${rt.semaforo_texto || "Horario evaluado."}
+          </div>
+        `;
+
+        if (rt.sugerir_pernocta) {
+          const btnP = document.createElement("button");
+          btnP.className = "btn btn-sm";
+          btnP.textContent = "Ver zonas de pernocta cercanas";
+          btnP.onclick = ev => {
+            ev.stopPropagation();
+            cargarParaderos(true);
+          };
+          card.appendChild(btnP);
+        }
+
+        card.onclick = () => seleccionarRuta(idx, destino, false);
+        optsEl.appendChild(card);
+      });
+    }
+
+    function seleccionarRuta(index, destino, silent = false) {
+      const rt = currentRoutes[index];
+      if (!rt) return;
+      selectedRoute = rt;
+      activeDestination = destino;
+
+      document.querySelectorAll(".route-card").forEach((c, i) => c.classList.toggle("selected", i === index));
+      if (routeLine) map.removeLayer(routeLine);
+      if (destMarker) map.removeLayer(destMarker);
+
+      const lineColor = rt.tipo === "libre" ? "#16a34a" : "#2563eb";
+      routeLine = L.polyline(rt.coords, { color: lineColor, weight: 5, opacity: 0.9 }).addTo(map);
+
+      const endPt = rt.coords.length ? rt.coords[rt.coords.length - 1] : [destino.lat, destino.lng];
+      destMarker = L.circleMarker(endPt, {
+        radius: 8,
+        color: "#ffffff",
+        weight: 3,
+        fillColor: "#dc2626",
+        fillOpacity: 1
+      }).bindPopup(`<strong>Destino</strong><br/>${destino.nombre}`).addTo(map);
+
+      actualizarHudRuta();
+
+      const semEl = document.getElementById("hud-semaforo");
+      const semColor = rt.semaforo_color || "VERDE";
+      semEl.className = `semaforo-hud ${semColor}`;
+      document.getElementById("hud-semaforo-text").textContent =
+        semColor === "VERDE" ? "Horario seguro" : (semColor === "AMARILLO" ? `Precaución (${rt.minutos_nocturnos || 0} min noche)` : `Riesgo nocturno (${rt.minutos_nocturnos || 0} min)`);
+
+      document.getElementById("ruta-acciones-activas").classList.remove("hidden");
+
+      if (!silent) {
+        switchTab("mapa");
+        setTimeout(() => map.fitBounds(routeLine.getBounds(), { padding: [45, 45] }), 120);
+        showToast(`Ruta trazada: ${rt.distancia_km} km · Semáforo ${semColor}`);
+      }
+    }
+
+    function limpiarRuta() {
+      selectedRoute = null;
+      activeDestination = null;
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+      document.getElementById("hud-eta").textContent = "--:--";
+      document.getElementById("hud-dist").textContent = "-- km restantes";
+      document.getElementById("hud-semaforo").classList.add("hidden");
+      document.getElementById("ruta-acciones-activas").classList.add("hidden");
+      showToast("Ruta limpiada");
+    }
+
+    // =========================================================================
+    // PARADEROS
+    // =========================================================================
+    async function cargarParaderos(soloPernocta = false) {
+      try {
+        const r = await fetch(`/paraderos?lat=${currentPos.lat}&lng=${currentPos.lng}&solo_pernocta=${soloPernocta}`);
+        if (!r.ok) return showToast("No se pudieron consultar paraderos");
+        const d = await r.json();
+        const items = d.paraderos || [];
+        paraderosLayer.clearLayers();
+        for (const p of items) {
+          L.circleMarker([p.lat, p.lng], {
+            radius: 7,
+            color: "#ffffff",
+            weight: 2,
+            fillColor: "#16a34a",
+            fillOpacity: 0.95
+          }).bindPopup(`<strong>${p.nombre}</strong><br/>${p.tipo} · ${p.dist_km} km<br/><small>${p.fuente}${p.notas ? " · " + p.notas : ""}</small>`).addTo(paraderosLayer);
+        }
+        closeModal("modal-paraderos");
+        switchTab("mapa");
+        showToast(`${items.length} paraderos cargados en el mapa`);
+      } catch (_) {
+        showToast("Error al consultar paraderos");
+      }
+    }
+
+    async function registrarParadero() {
+      const nombre = document.getElementById("par-nombre").value.trim();
+      const tipo = document.getElementById("par-tipo").value;
+      const notas = document.getElementById("par-notas").value.trim();
+      if (nombre.length < 2) return showToast("Escribe el nombre del paradero");
+
+      try {
+        const r = await fetch("/paraderos/seguro", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nombre,
+            tipo,
+            tiene_vigilancia: true,
+            notas,
+            lat: currentPos.lat,
+            lng: currentPos.lng
+          })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo guardar el paradero");
+        document.getElementById("par-nombre").value = "";
+        document.getElementById("par-notas").value = "";
+        showToast("Paradero guardado en la comunidad");
+        cargarParaderos(false);
+      } catch (_) {
+        showToast("Error de conexión al guardar paradero");
+      }
+    }
+
+    // =========================================================================
+    // RADIO CB
+    // =========================================================================
+    function getCBKey() {
+      return (document.getElementById("cb-clave").value || "").trim();
+    }
+
+    function updateCBUI() {
+      const btn = document.getElementById("btn-cb-toggle");
+      const cfg = document.getElementById("cfg-cb");
+      const priv = getCBKey().length >= 4;
+      cfg.checked = cbListening;
+      btn.classList.toggle("on", cbListening);
+      btn.textContent = cbListening ? (priv ? "CB PRIV: ON" : "CB 19: ON") : "CB: OFF";
+    }
+
+    function onCBKeyChange() {
+      cbLastId = 0;
+      updateCBUI();
+    }
+
+    function toggleCBListening(forceState) {
+      if (!authConfig.autenticado) {
+        document.getElementById("cfg-cb").checked = false;
+        return showToast("Inicia sesión en Perfil para activar la Radio CB");
+      }
+      cbListening = typeof forceState === "boolean" ? forceState : !cbListening;
+      updateCBUI();
+      clearInterval(cbPollTimer);
+      if (cbListening) {
+        pollCB();
+        cbPollTimer = setInterval(pollCB, 6000);
+        showToast("Radio CB encendido");
+      } else {
+        showToast("Radio CB apagado");
+      }
+    }
+
+    async function pollCB() {
+      if (!cbListening || !authConfig.autenticado) return;
+      const key = getCBKey();
+      const q = new URLSearchParams({
+        lat: String(currentPos.lat),
+        lng: String(currentPos.lng),
+        ultimo_id: String(cbLastId)
+      });
+      if (key.length >= 4) q.set("canal_privado", key);
+
+      try {
+        const r = await fetch(`/cb/escuchar?${q.toString()}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        for (const a of d.audios || []) {
+          cbLastId = Math.max(cbLastId, a.id);
+          const audio = new Audio(`data:${a.mime_type};base64,${a.audio_b64}`);
+          audio.play().catch(() => {});
+          showToast(`Transmisión CB recibida (~${a.distancia_km} km)`);
+        }
+      } catch (_) {}
+    }
+
+    async function toggleCBRecord() {
+      if (!authConfig.autenticado) return showToast("Inicia sesión en Perfil para transmitir por Radio CB");
+      const btn = document.getElementById("btn-cb-ptt");
+      const status = document.getElementById("cb-status");
+
+      if (cbRecording && cbRecorder) {
+        clearTimeout(cbStopTimeout);
+        cbRecorder.stop();
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        cbChunks = [];
+        cbRecorder = new MediaRecorder(stream);
+        cbRecording = true;
+        btn.textContent = "Detener y enviar transmisión";
+        btn.classList.remove("btn-primary");
+        btn.classList.add("btn-danger");
+        status.textContent = "Grabando audio (máximo 10 segundos)...";
+
+        cbRecorder.ondataavailable = e => { if (e.data.size > 0) cbChunks.push(e.data); };
+        cbRecorder.onstop = async () => {
+          cbRecording = false;
+          stream.getTracks().forEach(t => t.stop());
+          btn.textContent = "Iniciar transmisión (máx. 10 s)";
+          btn.classList.remove("btn-danger");
+          btn.classList.add("btn-primary");
+
+          const blob = new Blob(cbChunks, { type: cbRecorder.mimeType || "audio/webm" });
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const b64 = String(reader.result || "").split(",")[1] || "";
+            const key = getCBKey();
+            try {
+              const r = await fetch("/cb/enviar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  lat: currentPos.lat,
+                  lng: currentPos.lng,
+                  audio_b64: b64,
+                  mime_type: blob.type || "audio/webm",
+                  canal_privado: key.length >= 4 ? key : null
+                })
+              });
+              const d = await r.json();
+              if (!r.ok) {
+                status.textContent = d.detail || "No se pudo enviar la transmisión.";
+                return;
+              }
+              status.textContent = "Transmisión enviada.";
+              showToast("Audio enviado por Radio CB");
+            } catch (_) {
+              status.textContent = "Error de conexión al transmitir.";
+            }
+          };
+          reader.readAsDataURL(blob);
+        };
+
+        cbRecorder.start();
+        cbStopTimeout = setTimeout(() => {
+          if (cbRecording && cbRecorder) cbRecorder.stop();
+        }, 10000);
+      } catch (_) {
+        showToast("No se pudo acceder al micrófono");
+      }
+    }
+
+    // =========================================================================
+    // RASTREO EN VIVO, MONITOR DE DETENCIÓN ANÓMALA Y SOS
+    // =========================================================================
+    async function iniciarRastreo() {
+      if (!authConfig.autenticado) return showToast("Inicia sesión en Perfil para compartir tu viaje");
+      try {
+        const r = await fetch("/rastreo/iniciar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            destino: (activeDestination && activeDestination.nombre) || "En ruta",
+            lat: currentPos.lat,
+            lng: currentPos.lng,
+            eta_texto: document.getElementById("hud-eta").textContent || "--:--"
+          })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo iniciar el rastreo");
+
+        trackingCode = d.codigo;
+        lastMovePos = { lat: currentPos.lat, lng: currentPos.lng };
+        lastMoveTs = Date.now();
+        stallAlertSent = false;
+
+        const fullUrl = `${window.location.origin}${d.ruta_relativa}`;
+        const box = document.getElementById("rastreo-link-box");
+        box.innerHTML = `Enlace activo (24 h): <a href="${fullUrl}" target="_blank" style="color:var(--accent);">${fullUrl}</a>`;
+        box.classList.remove("hidden");
+        document.getElementById("btn-stop-trip").classList.remove("hidden");
+        document.getElementById("btn-demo-stall").classList.toggle("hidden", !authConfig.debug_mode);
+
+        try { await navigator.clipboard.writeText(fullUrl); showToast("Enlace de rastreo copiado al portapapeles"); }
+        catch (_) { showToast("Enlace de rastreo generado"); }
+
+        clearInterval(trackingTimer);
+        trackingTimer = setInterval(actualizarRastreo, 12000);
+
+        clearInterval(stallMonitorTimer);
+        stallMonitorTimer = setInterval(revisarDetencionAnomala, 20000);
+      } catch (_) {
+        showToast("Error de conexión al crear enlace de rastreo");
+      }
+    }
+
+    async function actualizarRastreo() {
+      if (!trackingCode) return;
+      try {
+        await fetch("/rastreo/actualizar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            codigo: trackingCode,
+            lat: currentPos.lat,
+            lng: currentPos.lng,
+            velocidad_kmh: currentPos.speedKmh,
+            eta_texto: document.getElementById("hud-eta").textContent || "--:--"
+          })
+        });
+      } catch (_) {}
+    }
+
+    function revisarDetencionAnomala() {
+      if (!trackingCode || !settings.detencion || stallPromptActive || stallAlertSent) return;
+      const minutosDetenido = (Date.now() - lastMoveTs) / 60000;
+      if (minutosDetenido >= 10) {
+        dispararChequeoDetencion(false);
+      }
+    }
+
+    function dispararChequeoDetencion(isDemo = false) {
+      if (!trackingCode) return showToast("Activa primero el seguimiento en vivo");
+      if (stallPromptActive) return;
+
+      stallPromptActive = true;
+      stallCountdownSec = isDemo ? 15 : 60;
+      document.getElementById("detencion-countdown").textContent = `${stallCountdownSec} s`;
+      openModal("modal-detencion");
+      speakTTS("Detectamos una detención prolongada en carretera. ¿Todo bien? Confirma en pantalla para cancelar la alerta automática.", true);
+
+      clearInterval(stallCountdownTimer);
+      stallCountdownTimer = setInterval(async () => {
+        stallCountdownSec -= 1;
+        document.getElementById("detencion-countdown").textContent = `${Math.max(0, stallCountdownSec)} s`;
+        if (stallCountdownSec <= 0) {
+          clearInterval(stallCountdownTimer);
+          stallPromptActive = false;
+          stallAlertSent = true;
+          closeModal("modal-detencion");
+          await enviarEstadoDetencion(true);
+          showToast("Alerta ámbar enviada al enlace de seguimiento en vivo");
+        }
+      }, 1000);
+    }
+
+    async function confirmarTodoBien() {
+      clearInterval(stallCountdownTimer);
+      stallPromptActive = false;
+      lastMoveTs = Date.now();
+      closeModal("modal-detencion");
+      if (stallAlertSent) {
+        stallAlertSent = false;
+        await enviarEstadoDetencion(false);
+      }
+      showToast("Confirmado: todo bien. Monitor reiniciado.");
+    }
+
+    async function enviarEstadoDetencion(activa) {
+      if (!trackingCode) return;
+      try {
+        await fetch("/rastreo/alerta-detencion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            codigo: trackingCode,
+            activa,
+            lat: currentPos.lat,
+            lng: currentPos.lng
+          })
+        });
+      } catch (_) {}
+    }
+
+    async function detenerRastreo() {
+      try { await fetch("/rastreo/detener", { method: "POST" }); } catch (_) {}
+      trackingCode = null;
+      stallAlertSent = false;
+      stallPromptActive = false;
+      clearInterval(trackingTimer);
+      clearInterval(stallMonitorTimer);
+      clearInterval(stallCountdownTimer);
+      closeModal("modal-detencion");
+      document.getElementById("rastreo-link-box").classList.add("hidden");
+      document.getElementById("btn-stop-trip").classList.add("hidden");
+      document.getElementById("btn-demo-stall").classList.add("hidden");
+      showToast("Seguimiento detenido");
+    }
+
+    async function dispararSOS() {
+      if (!authConfig.autenticado) return showToast("Inicia sesión en Perfil o llama directamente al 911");
+      try {
+        const r = await fetch("/sos/activar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: currentPos.lat, lng: currentPos.lng, origen: "BOTON" })
+        });
+        const d = await r.json();
+        if (!r.ok) return showToast(d.detail || "No se pudo registrar el SOS");
+
+        const mapsLink = `https://maps.google.com/?q=${currentPos.lat},${currentPos.lng}`;
+        const box = document.getElementById("sos-result");
+        const tel = (d.contacto_emergencia_tel || "").replace(/\D/g, "");
+        const waText = encodeURIComponent(`ALERTA SOS desde Copiloto Seguro MX. Necesito ayuda en esta ubicación: ${mapsLink}`);
+
+        box.innerHTML = tel
+          ? `Alerta SOS registrada. <a href="https://wa.me/52${tel}?text=${waText}" target="_blank" style="color:var(--accent);">Enviar ubicación por WhatsApp a ${d.contacto_emergencia_nombre || tel}</a>`
+          : `Alerta SOS registrada en tus coordenadas actuales (${currentPos.lat.toFixed(5)}, ${currentPos.lng.toFixed(5)}). Configura un teléfono de emergencia en Perfil.`;
+        box.classList.remove("hidden");
+        showToast("Alerta SOS activada");
+      } catch (_) {
+        showToast("Error de conexión. Marca al 911.");
+      }
+    }
+
+    // =========================================================================
+    // COPILOTO IA Y ANTI-SUEÑO
+    // =========================================================================
+    function appendChat(role, text) {
+      const box = document.getElementById("ia-chat");
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function enviarIA() {
+      const inp = document.getElementById("ia-input");
+      const msg = inp.value.trim();
+      if (!msg) return;
+      inp.value = "";
+      appendChat("user", msg);
+
+      try {
+        const r = await fetch("/agente", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mensaje: msg,
+            lat: currentPos.lat,
+            lng: currentPos.lng,
+            destino_actual: (activeDestination && activeDestination.nombre) || null
+          })
+        });
+        const d = await r.json();
+        const resp = d.respuesta || "Sin respuesta del copiloto.";
+        appendChat("bot", resp);
+        speakTTS(resp);
+
+        if (d.accion && d.accion.tipo_accion === "BUSCAR_PARADERO") {
+          cargarParaderos(!!(d.accion.parametro && d.accion.parametro.solo_pernocta));
+        }
+      } catch (_) {
+        appendChat("bot", "No se pudo comunicar con el servidor en este momento.");
+      }
+    }
+
+    function dictarIA() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return showToast("Tu navegador no soporta dictado por voz");
+      const rec = new SR();
+      rec.lang = "es-MX";
+      rec.interimResults = false;
+      rec.onresult = e => {
+        const text = e.results[0][0].transcript;
+        document.getElementById("ia-input").value = text;
+        enviarIA();
+      };
+      rec.onerror = () => showToast("No se pudo escuchar el micrófono");
+      rec.start();
+      showToast("Escuchando...");
+    }
+
+    async function activarAntisuenio() {
+      showToast("Activando modo anti-sueño...");
+      try {
+        const r = await fetch("/antisuenio", { method: "POST" });
+        const d = await r.json();
+        const texto = d.texto || "Mantén la vista en el camino y descansa en el próximo paradero seguro.";
+        openModal("modal-ia");
+        appendChat("bot", texto);
+        speakTTS(texto, true);
+      } catch (_) {
+        showToast("No se pudo activar el modo anti-sueño");
+      }
+    }
+
+    // =========================================================================
+    // ARRANQUE
+    // =========================================================================
+    window.addEventListener("DOMContentLoaded", () => {
+      initMap();
+      loadSettings();
+      loadVoices();
+      loadAuthConfig();
+    });
+  </script>
+</body>
+</html>
