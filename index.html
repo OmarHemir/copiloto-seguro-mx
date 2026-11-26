@@ -1228,7 +1228,7 @@
             Prioriza carreteras pavimentadas, evalúa el Semáforo de Horario Seguro y compara cuota contra libre con casetas, combustible y avisos en el tramo.
           </p>
           <div class="search-row">
-            <input id="ruta-query" class="input" type="text" placeholder="Ej. Tampico Centro, Monterrey, Estadio Banorte..." onkeydown="if(event.key==='Enter') buscarLugar()" />
+            <input id="ruta-query" class="input" type="text" placeholder="Ej. Tampico Centro, Monterrey, Altama..." onkeydown="if(event.key==='Enter') buscarLugar()" />
             <button class="btn btn-primary" onclick="buscarLugar()">Buscar</button>
           </div>
           <div id="ruta-resultados" class="place-list"></div>
@@ -1292,7 +1292,7 @@
           </div>
 
           <div class="field" style="margin-top:12px;">
-            <label>Voz neuronal (México)</label>
+            <label>Voz del asistente (dispositivo y servidor)</label>
             <select id="cfg-voz" class="input" onchange="saveSettings()"></select>
           </div>
 
@@ -1542,7 +1542,7 @@
               </svg>
               Acerca de y marco legal
             </h3>
-            <span id="app-version-badge" class="badge">v1.2.1-alpha</span>
+            <span id="app-version-badge" class="badge">v1.2.5-alpha</span>
           </div>
 
           <div class="muted">
@@ -1567,11 +1567,11 @@
             <div class="legal-body">
               Esta aplicación integra software y datos geográficos de código abierto y servicios externos bajo sus respectivas licencias:
               <ul>
-                <li><strong>Cartografía y búsquedas:</strong> &copy; OpenStreetMap contributors (licencia ODbL), Nominatim, Photon y Overpass API.</li>
+                <li><strong>Cartografía y búsquedas:</strong> &copy; OpenStreetMap contributors (licencia ODbL), Nominatim, Photon, ArcGIS World Geocoding y Overpass API.</li>
                 <li><strong>Visualización de mapa:</strong> Leaflet.js (licencia BSD-2-Clause).</li>
                 <li><strong>Cálculo de rutas:</strong> Motor Valhalla (licencia MIT).</li>
                 <li><strong>Backend y base de datos:</strong> FastAPI, Starlette y Uvicorn (licencia MIT); PostgreSQL / SQLite.</li>
-                <li><strong>Clima, voz e inteligencia artificial:</strong> Open-Meteo API, Edge-TTS, Google Identity Services (OAuth 2.0) y Google Gemini API.</li>
+                <li><strong>Clima, voz e inteligencia artificial:</strong> Open-Meteo API, Edge-TTS, Web Speech API, Google Identity Services (OAuth 2.0) y Google Gemini API.</li>
               </ul>
             </div>
           </details>
@@ -1812,7 +1812,7 @@
       support_email: "copilotoseguromx@gmail.com",
       autenticado: false,
       perfil: null,
-      version: "1.2.1-alpha"
+      version: "1.2.5-alpha"
     };
 
     // Rutas, selección manual y recálculo automático
@@ -1846,8 +1846,9 @@
     let cbRecording = false;
     let cbStopTimeout = null;
 
-    // Audio TTS
+    // Audio TTS y voces
     let currentAudio = null;
+    let cachedServerVoices = [];
 
     // Preferencias locales
     const SETTINGS_KEY = "copiloto_mx_settings_v4";
@@ -2049,7 +2050,7 @@
     }
 
     // =========================================================================
-    // CONFIGURACIÓN Y VOCES (NEURONAL + RESPALDO NAVEGADOR/ANDROID)
+    // CONFIGURACIÓN Y VOCES (VOCES REALES DEL DISPOSITIVO + SERVIDOR NEURONAL)
     // =========================================================================
     function loadSettings() {
       try {
@@ -2092,8 +2093,71 @@
       document.getElementById("lbl-tono").textContent = tono === 0 ? "Natural (0 Hz)" : `${tono > 0 ? "+" : ""}${tono} Hz`;
     }
 
+    function getDeviceSpanishVoices() {
+      if (!("speechSynthesis" in window)) return [];
+      const all = window.speechSynthesis.getVoices() || [];
+      const es = all.filter(v => v.lang && v.lang.toLowerCase().startsWith("es"));
+      es.sort((a, b) => {
+        const score = lang => {
+          const l = (lang || "").toLowerCase();
+          if (l === "es-mx" || l === "es_mx") return 0;
+          if (l === "es-us" || l === "es_us") return 1;
+          if (l.startsWith("es-419")) return 2;
+          return 3;
+        };
+        const sa = score(a.lang);
+        const sb = score(b.lang);
+        return sa !== sb ? sa - sb : a.name.localeCompare(b.name);
+      });
+      return es;
+    }
+
+    function renderVoiceOptions() {
+      const sel = document.getElementById("cfg-voz");
+      if (!sel) return;
+      const localVoices = getDeviceSpanishVoices();
+      const serverVoices = cachedServerVoices.length ? cachedServerVoices : FALLBACK_VOCES;
+
+      sel.innerHTML = "";
+
+      if (localVoices.length) {
+        const grpLocal = document.createElement("optgroup");
+        grpLocal.label = "Voces de tu dispositivo (Recomendado en móvil)";
+        localVoices.forEach(v => {
+          const opt = document.createElement("option");
+          opt.value = `local:${v.voiceURI}`;
+          opt.textContent = `${v.name} (${v.lang})`;
+          grpLocal.appendChild(opt);
+        });
+        sel.appendChild(grpLocal);
+      }
+
+      const grpSrv = document.createElement("optgroup");
+      grpSrv.label = "Voces neuronales (servidor)";
+      serverVoices.forEach(v => {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = v.nombre;
+        grpSrv.appendChild(opt);
+      });
+      sel.appendChild(grpSrv);
+
+      const allVals = Array.from(sel.options).map(o => o.value);
+      if (allVals.includes(settings.voz)) {
+        sel.value = settings.voz;
+      } else if (localVoices.length) {
+        sel.value = `local:${localVoices[0].voiceURI}`;
+        settings.voz = sel.value;
+      } else if (allVals.length) {
+        sel.value = allVals[0];
+        settings.voz = sel.value;
+      }
+    }
+
     function resetVoiceSettings() {
-      document.getElementById("cfg-voz").value = "es-MX-DaliaNeural";
+      const localVoices = getDeviceSpanishVoices();
+      const sel = document.getElementById("cfg-voz");
+      sel.value = localVoices.length ? `local:${localVoices[0].voiceURI}` : "es-MX-DaliaNeural";
       document.getElementById("cfg-velocidad").value = 0;
       document.getElementById("cfg-tono").value = 0;
       updateVoiceLabels();
@@ -2102,28 +2166,45 @@
     }
 
     async function loadVoices() {
-      let voces = FALLBACK_VOCES;
+      cachedServerVoices = FALLBACK_VOCES;
       try {
         const r = await fetch("/tts/voces");
         if (r.ok) {
           const d = await r.json();
-          if (Array.isArray(d.voces) && d.voces.length) voces = d.voces;
+          if (Array.isArray(d.voces) && d.voces.length) cachedServerVoices = d.voces;
         }
       } catch (_) {}
-      const sel = document.getElementById("cfg-voz");
-      sel.innerHTML = voces.map(v => `<option value="${v.id}">${v.nombre}</option>`).join("");
-      sel.value = voces.some(v => v.id === settings.voz) ? settings.voz : voces[0].id;
+
+      renderVoiceOptions();
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = () => renderVoiceOptions();
+      }
     }
 
-    function speakBrowserFallback(texto) {
+    function speakBrowserFallback(texto, exactVoiceURI = null, serverVoiceId = null) {
       if (!("speechSynthesis" in window)) return;
       try {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(texto);
         utter.lang = "es-MX";
-        const voices = window.speechSynthesis.getVoices() || [];
-        const mxVoice = voices.find(v => v.lang === "es-MX") || voices.find(v => v.lang && v.lang.startsWith("es"));
-        if (mxVoice) utter.voice = mxVoice;
+
+        const esVoices = getDeviceSpanishVoices();
+        let chosen = null;
+        if (exactVoiceURI) {
+          chosen = esVoices.find(v => v.voiceURI === exactVoiceURI) || null;
+        }
+        if (!chosen && serverVoiceId && esVoices.length > 1) {
+          const idx = Math.max(0, FALLBACK_VOCES.findIndex(v => v.id === serverVoiceId));
+          chosen = esVoices[idx % esVoices.length];
+        }
+        if (!chosen && esVoices.length) {
+          chosen = esVoices[0];
+        }
+        if (chosen) {
+          utter.voice = chosen;
+          utter.lang = chosen.lang || "es-MX";
+        }
+
         utter.rate = Math.max(0.6, Math.min(1.6, 1 + (settings.velocidad || 0) / 100));
         utter.pitch = Math.max(0.6, Math.min(1.5, 1 + (settings.tono || 0) / 50));
         window.speechSynthesis.speak(utter);
@@ -2132,11 +2213,17 @@
 
     async function speakTTS(texto, force = false) {
       if (!force && !settings.tts) return;
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+      }
+
+      if (settings.voz && settings.voz.startsWith("local:")) {
+        speakBrowserFallback(texto, settings.voz.slice(6), null);
+        return;
+      }
+
       try {
-        if (currentAudio) {
-          currentAudio.pause();
-          currentAudio = null;
-        }
         const r = await fetch("/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2148,21 +2235,21 @@
           })
         });
         if (!r.ok) {
-          speakBrowserFallback(texto);
+          speakBrowserFallback(texto, null, settings.voz);
           return;
         }
         const blob = await r.blob();
         if (!blob || blob.size < 200) {
-          speakBrowserFallback(texto);
+          speakBrowserFallback(texto, null, settings.voz);
           return;
         }
         const url = URL.createObjectURL(blob);
         currentAudio = new Audio(url);
         currentAudio.onended = () => URL.revokeObjectURL(url);
-        currentAudio.onerror = () => speakBrowserFallback(texto);
+        currentAudio.onerror = () => speakBrowserFallback(texto, null, settings.voz);
         await currentAudio.play();
       } catch (_) {
-        speakBrowserFallback(texto);
+        speakBrowserFallback(texto, null, settings.voz);
       }
     }
 
@@ -2752,8 +2839,65 @@
     }
 
     // =========================================================================
-    // BUSCADOR, COMPARADOR DE RUTAS Y SEMÁFORO DE HORARIO SEGURO
+    // BUSCADOR (SERVIDOR + RESPALDO DIRECTO PHOTON/ARCGIS) Y RUTAS
     // =========================================================================
+    async function buscarLugarDirecto(q) {
+      const resultados = [];
+      const seen = new Set();
+      const addUniq = (item) => {
+        const k = `${item.lat.toFixed(3)},${item.lng.toFixed(3)}`;
+        if (seen.has(k)) return;
+        seen.add(k);
+        resultados.push(item);
+      };
+
+      try {
+        const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q + ", México")}&limit=8&lang=es`);
+        if (r.ok) {
+          const d = await r.json();
+          for (const f of d.features || []) {
+            const c = (f.geometry && f.geometry.coordinates) || [];
+            if (c.length < 2) continue;
+            const lng = parseFloat(c[0]);
+            const lat = parseFloat(c[1]);
+            const p = f.properties || {};
+            const cc = String(p.countrycode || "").toUpperCase();
+            if (cc && cc !== "MX") continue;
+            if (lat < 14 || lat > 33 || lng < -119 || lng > -86) continue;
+            const parts = [p.name, p.street, p.district || p.locality, p.city || p.county, p.state, "México"].filter(Boolean);
+            const nombre = Array.from(new Set(parts)).join(", ") || q;
+            const etiqueta = p.osm_key === "place" ? "Localidad" : (p.osm_key === "highway" ? "Vialidad" : "Punto de interés");
+            addUniq({ nombre, etiqueta, lat, lng });
+          }
+        }
+      } catch (_) {}
+
+      if (!resultados.length) {
+        try {
+          const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encodeURIComponent(q)}&sourceCountry=MEX&maxLocations=6&f=json`;
+          const r = await fetch(url);
+          if (r.ok) {
+            const d = await r.json();
+            for (const c of d.candidates || []) {
+              const loc = c.location || {};
+              if (loc.x == null || loc.y == null) continue;
+              const lat = parseFloat(loc.y);
+              const lng = parseFloat(loc.x);
+              if (lat < 14 || lat > 33 || lng < -119 || lng > -86) continue;
+              addUniq({
+                nombre: c.address || q,
+                etiqueta: "Ubicación",
+                lat,
+                lng
+              });
+            }
+          }
+        } catch (_) {}
+      }
+
+      return resultados.slice(0, 6);
+    }
+
     async function buscarLugar() {
       const q = document.getElementById("ruta-query").value.trim();
       if (q.length < 2) return showToast("Escribe al menos 2 caracteres para buscar");
@@ -2761,31 +2905,45 @@
       listEl.innerHTML = '<div class="muted">Buscando ubicaciones...</div>';
       document.getElementById("ruta-opciones").innerHTML = "";
 
+      let res = [];
+      let hadError = false;
+
       try {
         const r = await fetch(`/buscar-lugar?q=${encodeURIComponent(q)}`);
-        const d = await r.json();
-        if (!r.ok) {
-          listEl.innerHTML = `<div class="muted">${d.detail || "No se pudo realizar la búsqueda."}</div>`;
-          return;
-        }
-        const res = d.resultados || [];
-        if (!res.length) {
-          listEl.innerHTML = '<div class="muted">No se encontraron resultados en México para esa búsqueda.</div>';
-          return;
-        }
-        listEl.innerHTML = "";
-        for (const item of res) {
-          const btn = document.createElement("button");
-          btn.className = "place-item";
-          btn.innerHTML = `
-            <span class="place-tag">${item.etiqueta || "Ubicación"}</span>
-            <span style="font-size:13px; font-weight:600;">${item.nombre}</span>
-          `;
-          btn.onclick = () => calcularRutas(item, false);
-          listEl.appendChild(btn);
+        if (r.ok) {
+          const d = await r.json();
+          res = d.resultados || [];
+        } else {
+          hadError = true;
         }
       } catch (_) {
-        listEl.innerHTML = '<div class="muted">Error de conexión con el buscador.</div>';
+        hadError = true;
+      }
+
+      if (!res.length) {
+        try {
+          res = await buscarLugarDirecto(q);
+          if (res.length) hadError = false;
+        } catch (_) {}
+      }
+
+      if (!res.length) {
+        listEl.innerHTML = hadError
+          ? '<div class="muted">No se pudo consultar el buscador de direcciones. Intenta de nuevo en unos segundos.</div>'
+          : '<div class="muted">No se encontraron resultados en México para esa búsqueda.</div>';
+        return;
+      }
+
+      listEl.innerHTML = "";
+      for (const item of res) {
+        const btn = document.createElement("button");
+        btn.className = "place-item";
+        btn.innerHTML = `
+          <span class="place-tag">${item.etiqueta || "Ubicación"}</span>
+          <span style="font-size:13px; font-weight:600;">${item.nombre}</span>
+        `;
+        btn.onclick = () => calcularRutas(item, false);
+        listEl.appendChild(btn);
       }
     }
 
