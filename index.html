@@ -1354,7 +1354,7 @@
           <div class="setting-row">
             <div class="setting-info">
               <strong>Recálculo automático de ruta</strong>
-              <span>Si te desvías más de 250 metros de la carretera trazada, recalcula la ruta automáticamente.</span>
+              <span>Si te desvías más de 55 metros en ciudad o 120 metros en carretera, recalcula la ruta automáticamente.</span>
             </div>
             <label class="switch">
               <input id="cfg-recalculo" type="checkbox" onchange="saveSettings()" />
@@ -1542,7 +1542,7 @@
               </svg>
               Acerca de y marco legal
             </h3>
-            <span id="app-version-badge" class="badge">v1.2.5-alpha</span>
+            <span id="app-version-badge" class="badge">v1.2.6-alpha</span>
           </div>
 
           <div class="muted">
@@ -1812,7 +1812,7 @@
       support_email: "copilotoseguromx@gmail.com",
       autenticado: false,
       perfil: null,
-      version: "1.2.5-alpha"
+      version: "1.2.6-alpha"
     };
 
     // Rutas, selección manual y recálculo automático
@@ -1954,7 +1954,7 @@
 
     function minDistToRouteMeters(lat, lng, coords) {
       if (!coords || !coords.length) return 0;
-      const step = Math.max(1, Math.floor(coords.length / 260));
+      const step = Math.max(1, Math.floor(coords.length / 350));
       let best = Infinity;
       for (let i = 0; i < coords.length; i += step) {
         const d = haversineMeters(lat, lng, coords[i][0], coords[i][1]);
@@ -1991,14 +1991,14 @@
         coords[coords.length - 1][0],
         coords[coords.length - 1][1]
       );
-      if (distAlFinal <= 60) {
-        return { llegado: true, remKm: 0, remMin: 0 };
+      if (distAlFinal <= 45) {
+        return { llegado: true, remKm: 0, remMin: 0, bestIdx: coords.length - 1, bestDist: distAlFinal };
       }
 
       const remKm = Math.round((remMeters / 1000) * 10) / 10;
       const ratio = Math.min(1, remKm / Math.max(selectedRoute.distancia_km, 0.1));
       const remMin = Math.max(1, Math.round(selectedRoute.duracion_min * ratio));
-      return { llegado: false, remKm, remMin };
+      return { llegado: false, remKm, remMin, bestIdx, bestDist };
     }
 
     function actualizarHudRuta() {
@@ -2007,9 +2007,16 @@
       if (!prog) return;
 
       if (prog.llegado) {
+        if (routeLine) routeLine.setLatLngs([]);
         document.getElementById("hud-eta").textContent = "Llegaste";
         document.getElementById("hud-dist").textContent = `0.0 km restantes (${selectedRoute.tipo})`;
         return;
+      }
+
+      if (routeLine && selectedRoute.coords && selectedRoute.coords.length >= 2) {
+        const nextIdx = Math.min(prog.bestIdx + 1, selectedRoute.coords.length - 1);
+        const remaining = selectedRoute.coords.slice(nextIdx);
+        routeLine.setLatLngs([[currentPos.lat, currentPos.lng], ...remaining]);
       }
 
       document.getElementById("hud-eta").textContent = formatETA(prog.remMin);
@@ -2343,7 +2350,7 @@
       loadZonasSinSenal();
       loadRiesgosPesados();
 
-      setInterval(actualizarHudRuta, 10000);
+      setInterval(actualizarHudRuta, 5000);
       setInterval(loadReportes, 45000);
       setInterval(loadClima, 300000);
       setInterval(loadLimiteVelocidad, 30000);
@@ -2395,16 +2402,20 @@
           verificarDesvioYRecalcular();
         },
         () => {},
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
       );
     }
 
     async function verificarDesvioYRecalcular() {
       if (!settings.recalculo || !selectedRoute || !activeDestination || rerouteInFlight) return;
-      if (Date.now() - lastRerouteTs < 25000) return;
+      if (Date.now() - lastRerouteTs < 12000) return;
 
+      const distAlFinal = haversineMeters(currentPos.lat, currentPos.lng, activeDestination.lat, activeDestination.lng);
+      if (distAlFinal <= 45) return;
+
+      const umbralM = currentPos.speedKmh > 55 ? 120 : 55;
       const distM = minDistToRouteMeters(currentPos.lat, currentPos.lng, selectedRoute.coords);
-      if (distM <= 250) return;
+      if (distM <= umbralM) return;
 
       rerouteInFlight = true;
       lastRerouteTs = Date.now();
