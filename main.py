@@ -32,7 +32,7 @@ except ImportError:
 # =============================================================================
 # CONFIGURACIÓN GENERAL Y VARIABLES DE ENTORNO
 # =============================================================================
-APP_VERSION = "1.2.1-alpha"
+APP_VERSION = "1.2.3-alpha"
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "copiloto.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -2070,34 +2070,50 @@ async def enviar_mensaje_soporte(
 
 
 # =============================================================================
-# COPILOTO IA, ANTI-SUEÑO Y VOZ NEURONAL (12 VOCES MX + VELOCIDAD + TONO)
+# COPILOTO IA (SOPORTE VERTEX AI AQ. + AI STUDIO AIza), ANTI-SUEÑO Y VOZ
 # =============================================================================
 async def _llamar_gemini(system_prompt: str, user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         return ""
+
     modelos = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    if GEMINI_API_KEY.startswith("AQ."):
+        bases = [
+            "https://aiplatform.googleapis.com/v1/publishers/google/models",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ]
+    else:
+        bases = [
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            "https://aiplatform.googleapis.com/v1/publishers/google/models",
+        ]
+
     payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {"temperature": 0.5, "maxOutputTokens": 260},
     }
+
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for modelo in modelos:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
-            try:
-                r = await client.post(url, json=payload)
-                if r.status_code != 200:
+        for base in bases:
+            for modelo in modelos:
+                url = f"{base}/{modelo}:generateContent?key={GEMINI_API_KEY}"
+                try:
+                    r = await client.post(url, json=payload)
+                    if r.status_code != 200:
+                        print(f"[Gemini] {base} {modelo} -> HTTP {r.status_code}: {r.text[:180]}")
+                        continue
+                    data = r.json()
+                    cands = data.get("candidates") or []
+                    if not cands:
+                        continue
+                    parts = cands[0].get("content", {}).get("parts") or []
+                    texto = "".join(p.get("text", "") for p in parts).strip()
+                    if texto:
+                        return texto
+                except Exception as exc:
+                    print(f"[Gemini] Error {modelo}: {exc}")
                     continue
-                data = r.json()
-                cands = data.get("candidates") or []
-                if not cands:
-                    continue
-                parts = cands[0].get("content", {}).get("parts") or []
-                texto = "".join(p.get("text", "") for p in parts).strip()
-                if texto:
-                    return texto
-            except Exception:
-                continue
     return ""
 
 
@@ -2134,10 +2150,8 @@ async def agente_copiloto(
     if not resp:
         if accion:
             resp = "Buscando zonas de descanso y paraderos cercanos sobre tu mapa ahora mismo."
-        elif not GEMINI_API_KEY.startswith("AIza"):
-            resp = "La clave GEMINI_API_KEY configurada en el servidor no tiene formato válido de Google AI Studio (debe iniciar con AIza)."
         else:
-            resp = "No pude conectar con Gemini en este momento. Revisa tu cuota o restricciones de la clave en Google AI Studio."
+            resp = "El Copiloto IA no está disponible en este momento. Intenta de nuevo en unos segundos."
 
     return {"respuesta": resp, "accion": accion}
 
