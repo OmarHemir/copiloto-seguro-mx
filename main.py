@@ -32,7 +32,7 @@ except ImportError:
 # =============================================================================
 # CONFIGURACIÓN GENERAL Y VARIABLES DE ENTORNO
 # =============================================================================
-APP_VERSION = "1.2.5-alpha"
+APP_VERSION = "1.2.6-alpha"
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "copiloto.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -103,6 +103,7 @@ TIPOS_REPORTE_GRAVEDAD = {
 _last_gps_by_user: Dict[int, Tuple[float, float, float]] = {}
 _rate_limit_hits: Dict[str, List[float]] = {}
 _speed_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+_gemini_models_cache: Tuple[float, List[str]] = (0.0, [])
 
 app = FastAPI(title="Copiloto Seguro MX", version=APP_VERSION)
 
@@ -2140,38 +2141,89 @@ async def enviar_mensaje_soporte(
 
 
 # =============================================================================
-# COPILOTO IA (GEMINI 3.8 FLASH), ANTI-SUEÑO Y VOZ NEURONAL
+# COPILOTO IA (DESCUBRIMIENTO DINÁMICO DE MODELOS + REINTENTO ANTE 503)
 # =============================================================================
+async def _obtener_modelos_gemini(client: httpx.AsyncClient) -> List[str]:
+    global _gemini_models_cache
+    ts, cached = _gemini_models_cache
+    if cached and (time.time() - ts) < 1800:
+        return cached
+
+    prioridad = ["gemini-3.8-flash"]
+    descubiertos: List[str] = []
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        r = await client.get(url, timeout=8.0)
+        if r.status_code == 200:
+            bloqueados = ("embedding", "aqa", "imagen", "veo", "tts", "audio", "robotics", "computer-use")
+            for m in r.json().get("models") or []:
+                methods = m.get("supportedGenerationMethods") or []
+                if "generateContent" not in methods:
+                    continue
+                name = str(m.get("name") or "").replace("models/", "").strip()
+                low = name.lower()
+                if not low.startswith("gemini-") or any(b in low for b in bloqueados):
+                    continue
+                if low.startswith("gemini-1.") or low.startswith("gemini-2.0") or low.startswith("gemini-2.5"):
+                    continue
+                descubiertos.append(name)
+    except Exception as exc:
+        print(f"[Gemini] Error listando modelos: {exc}")
+
+    # Ordena priorizando modelos flash más recientes y ligeros como respaldo rápido
+    descubiertos.sort(
+        key=lambda n: (
+            0 if "flash-lite" in n else (1 if "flash" in n else 2),
+            n,
+        )
+    )
+
+    finales: List[str] = []
+    for m in prioridad + descubiertos:
+        if m not in finales:
+            finales.append(m)
+
+    finales = finales[:4]
+    _gemini_models_cache = (time.time(), finales)
+    print(f"[Gemini] Modelos activos en cola: {finales}")
+    return finales
+
+
 async def _llamar_gemini(system_prompt: str, user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         return ""
 
-    modelos = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.5-flash"]
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {"temperature": 0.5, "maxOutputTokens": 260},
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=18.0) as client:
+        modelos = await _obtener_modelos_gemini(client)
         for modelo in modelos:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
-            try:
-                r = await client.post(url, json=payload)
-                if r.status_code != 200:
-                    print(f"[Gemini] {modelo} -> HTTP {r.status_code}: {r.text[:160]}")
-                    continue
-                data = r.json()
-                cands = data.get("candidates") or []
-                if not cands:
-                    continue
-                parts = cands[0].get("content", {}).get("parts") or []
-                texto = "".join(p.get("text", "") for p in parts).strip()
-                if texto:
-                    return texto
-            except Exception as exc:
-                print(f"[Gemini] Error {modelo}: {exc}")
-                continue
+            for intento in range(2):
+                try:
+                    r = await client.post(url, json=payload)
+                    if r.status_code == 200:
+                        data = r.json()
+                        cands = data.get("candidates") or []
+                        if not cands:
+                            break
+                        parts = cands[0].get("content", {}).get("parts") or []
+                        texto = "".join(p.get("text", "") for p in parts).strip()
+                        if texto:
+                            return texto
+                        break
+                    print(f"[Gemini] {modelo} (intento {intento + 1}) -> HTTP {r.status_code}: {r.text[:160]}")
+                    if r.status_code in (503, 429) and intento == 0:
+                        await asyncio.sleep(1.2)
+                        continue
+                    break
+                except Exception as exc:
+                    print(f"[Gemini] Error {modelo}: {exc}")
+                    break
     return ""
 
 
@@ -2209,7 +2261,7 @@ async def agente_copiloto(
         if accion:
             resp = "Buscando zonas de descanso y paraderos cercanos sobre tu mapa ahora mismo."
         else:
-            resp = "El Copiloto IA no está disponible en este momento. Intenta de nuevo en unos segundos."
+            resp = "El Copiloto IA está saturado en este momento. Intenta de nuevo en unos segundos."
 
     return {"respuesta": resp, "accion": accion}
 
