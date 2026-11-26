@@ -19,7 +19,7 @@ import edge_tts
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -32,7 +32,7 @@ except ImportError:
 # =============================================================================
 # CONFIGURACIÓN GENERAL Y VARIABLES DE ENTORNO
 # =============================================================================
-APP_VERSION = "1.2.0-alpha"
+APP_VERSION = "1.2.1-alpha"
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "copiloto.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -64,6 +64,7 @@ MX_TZ = timezone(timedelta(hours=-6))
 
 VALHALLA_URL = os.getenv("VALHALLA_URL", "https://valhalla1.openstreetmap.de/route")
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+PHOTON_URL = "https://photon.komoot.io/api/"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = f"CopilotoSeguroMX/{APP_VERSION} ({SUPPORT_EMAIL})"
@@ -1103,13 +1104,13 @@ def listar_zonas_sin_senal(lat: float = Query(...), lng: float = Query(...)):
 
 
 # =============================================================================
-# BUSCADOR ANTI-MONTE, RUTAS Y SEMÁFORO DE HORARIO SEGURO (DESDE 7:30 P.M.)
+# BUSCADOR ANTI-MONTE (NOMINATIM + RESPALDO PHOTON) Y RUTAS
 # =============================================================================
-def _clasificar_lugar(item: Dict[str, Any]) -> Tuple[int, str]:
-    cls = (item.get("class") or item.get("category") or "").lower()
-    typ = (item.get("type") or "").lower()
+def _clasificar_lugar(cls_raw: str, typ_raw: str) -> Tuple[int, str]:
+    cls = cls_raw.lower()
+    typ = typ_raw.lower()
 
-    if cls == "place" and typ in ("city", "town", "village", "suburb", "neighbourhood", "quarter"):
+    if cls == "place" and typ in ("city", "town", "village", "suburb", "neighbourhood", "quarter", "district"):
         etiquetas = {
             "city": "Ciudad",
             "town": "Cabecera / Pueblo",
@@ -1117,21 +1118,21 @@ def _clasificar_lugar(item: Dict[str, Any]) -> Tuple[int, str]:
             "suburb": "Colonia",
             "neighbourhood": "Barrio",
             "quarter": "Zona urbana",
+            "district": "Zona urbana",
         }
         return (1, etiquetas.get(typ, "Localidad"))
     if cls in ("amenity", "tourism", "leisure", "shop", "aeroway", "railway", "building", "office"):
         return (2, "Punto de interés")
     if cls == "highway":
         return (3, "Vialidad / Carretera")
-    if cls == "place" and typ in ("hamlet", "isolated_dwelling"):
+    if cls == "place" and typ in ("hamlet", "isolated_dwelling", "locality"):
         return (4, "Comunidad")
     if cls == "boundary" and typ == "administrative":
         return (9, "Límite municipal")
     return (5, "Ubicación")
 
 
-@app.get("/buscar-lugar")
-async def buscar_lugar(q: str = Query(..., min_length=2, max_length=120)):
+async def _buscar_nominatim(client: httpx.AsyncClient, q: str) -> List[Dict[str, Any]]:
     params = {
         "q": q,
         "format": "jsonv2",
@@ -1140,39 +1141,103 @@ async def buscar_lugar(q: str = Query(..., min_length=2, max_length=120)):
         "limit": 12,
         "accept-language": "es",
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT}) as client:
-            r = await client.get(NOMINATIM_URL, params=params)
-            r.raise_for_status()
-            data = r.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail="No se pudo consultar el buscador de direcciones.")
-
-    ranked = []
-    seen_coords = set()
+    r = await client.get(NOMINATIM_URL, params=params)
+    r.raise_for_status()
+    data = r.json()
+    out = []
     for item in data:
         try:
             lat = float(item["lat"])
             lng = float(item["lon"])
         except (KeyError, ValueError):
             continue
-        key = (round(lat, 3), round(lng, 3))
-        if key in seen_coords:
-            continue
-        seen_coords.add(key)
-
-        prio, etiqueta = _clasificar_lugar(item)
-        imp = float(item.get("importance") or 0.0)
-        ranked.append(
+        cls = str(item.get("class") or item.get("category") or "")
+        typ = str(item.get("type") or "")
+        prio, etiqueta = _clasificar_lugar(cls, typ)
+        out.append(
             {
                 "prio": prio,
-                "imp": imp,
+                "imp": float(item.get("importance") or 0.0),
                 "nombre": item.get("display_name", q),
                 "etiqueta": etiqueta,
                 "lat": lat,
                 "lng": lng,
             }
         )
+    return out
+
+
+async def _buscar_photon(client: httpx.AsyncClient, q: str) -> List[Dict[str, Any]]:
+    params = {
+        "q": f"{q}, México",
+        "limit": 12,
+        "lang": "es",
+    }
+    r = await client.get(PHOTON_URL, params=params)
+    r.raise_for_status()
+    features = r.json().get("features") or []
+    out = []
+    for feat in features:
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        lng, lat = float(coords[0]), float(coords[1])
+        props = feat.get("properties") or {}
+        cc = str(props.get("countrycode") or "").upper()
+        if cc and cc != "MX":
+            continue
+        if not (14.0 <= lat <= 33.0 and -119.0 <= lng <= -86.0):
+            continue
+
+        parts = [
+            props.get("name"),
+            props.get("street"),
+            props.get("district") or props.get("locality"),
+            props.get("city") or props.get("county"),
+            props.get("state"),
+            "México",
+        ]
+        nombre = ", ".join(dict.fromkeys(str(p).strip() for p in parts if p and str(p).strip()))
+        cls = str(props.get("osm_key") or "")
+        typ = str(props.get("osm_value") or props.get("type") or "")
+        prio, etiqueta = _clasificar_lugar(cls, typ)
+        out.append(
+            {
+                "prio": prio,
+                "imp": 0.5,
+                "nombre": nombre or q,
+                "etiqueta": etiqueta,
+                "lat": lat,
+                "lng": lng,
+            }
+        )
+    return out
+
+
+@app.get("/buscar-lugar")
+async def buscar_lugar(q: str = Query(..., min_length=2, max_length=120)):
+    raw_items: List[Dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT}) as client:
+        try:
+            raw_items = await _buscar_nominatim(client, q)
+        except Exception:
+            raw_items = []
+
+        if not raw_items:
+            try:
+                raw_items = await _buscar_photon(client, q)
+            except Exception:
+                raise HTTPException(status_code=502, detail="No se pudo consultar el buscador de direcciones.")
+
+    ranked = []
+    seen_coords = set()
+    for item in raw_items:
+        key = (round(item["lat"], 3), round(item["lng"], 3))
+        if key in seen_coords:
+            continue
+        seen_coords.add(key)
+        ranked.append(item)
 
     ranked.sort(key=lambda x: (x["prio"], -x["imp"]))
     has_non_boundary = any(x["prio"] < 9 for x in ranked)
@@ -2010,25 +2075,30 @@ async def enviar_mensaje_soporte(
 async def _llamar_gemini(system_prompt: str, user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         return ""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    modelos = ["gemini-2.5-flash", "gemini-2.0-flash"]
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {"temperature": 0.5, "maxOutputTokens": 260},
     }
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(url, json=payload)
-            if r.status_code != 200:
-                return ""
-            data = r.json()
-            cands = data.get("candidates") or []
-            if not cands:
-                return ""
-            parts = cands[0].get("content", {}).get("parts") or []
-            return "".join(p.get("text", "") for p in parts).strip()
-    except Exception:
-        return ""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for modelo in modelos:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                r = await client.post(url, json=payload)
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                cands = data.get("candidates") or []
+                if not cands:
+                    continue
+                parts = cands[0].get("content", {}).get("parts") or []
+                texto = "".join(p.get("text", "") for p in parts).strip()
+                if texto:
+                    return texto
+            except Exception:
+                continue
+    return ""
 
 
 @app.post("/agente")
@@ -2064,8 +2134,10 @@ async def agente_copiloto(
     if not resp:
         if accion:
             resp = "Buscando zonas de descanso y paraderos cercanos sobre tu mapa ahora mismo."
+        elif not GEMINI_API_KEY.startswith("AIza"):
+            resp = "La clave GEMINI_API_KEY configurada en el servidor no tiene formato válido de Google AI Studio (debe iniciar con AIza)."
         else:
-            resp = "No pude conectar con el servicio de inteligencia en este momento. Verifica tu conexión o clave de API."
+            resp = "No pude conectar con Gemini en este momento. Revisa tu cuota o restricciones de la clave en Google AI Studio."
 
     return {"respuesta": resp, "accion": accion}
 
@@ -2098,7 +2170,8 @@ async def generar_tts(body: TTSIn):
     rate_str = f"{body.velocidad:+d}%"
     pitch_str = f"{body.tono:+d}Hz"
 
-    async def audio_stream():
+    audio_bytes = bytearray()
+    try:
         comm = edge_tts.Communicate(
             text=body.texto,
             voice=voz,
@@ -2107,6 +2180,11 @@ async def generar_tts(body: TTSIn):
         )
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
-                yield chunk["data"]
+                audio_bytes.extend(chunk["data"])
+    except Exception:
+        raise HTTPException(status_code=502, detail="Servicio neuronal de voz temporalmente no disponible.")
 
-    return StreamingResponse(audio_stream(), media_type="audio/mpeg")
+    if len(audio_bytes) < 200:
+        raise HTTPException(status_code=502, detail="No se recibió audio del servidor de voz.")
+
+    return Response(content=bytes(audio_bytes), media_type="audio/mpeg")

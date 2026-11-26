@@ -1542,7 +1542,7 @@
               </svg>
               Acerca de y marco legal
             </h3>
-            <span id="app-version-badge" class="badge">v1.2.0-alpha</span>
+            <span id="app-version-badge" class="badge">v1.2.1-alpha</span>
           </div>
 
           <div class="muted">
@@ -1567,7 +1567,7 @@
             <div class="legal-body">
               Esta aplicación integra software y datos geográficos de código abierto y servicios externos bajo sus respectivas licencias:
               <ul>
-                <li><strong>Cartografía y búsquedas:</strong> &copy; OpenStreetMap contributors (licencia ODbL), Nominatim y Overpass API.</li>
+                <li><strong>Cartografía y búsquedas:</strong> &copy; OpenStreetMap contributors (licencia ODbL), Nominatim, Photon y Overpass API.</li>
                 <li><strong>Visualización de mapa:</strong> Leaflet.js (licencia BSD-2-Clause).</li>
                 <li><strong>Cálculo de rutas:</strong> Motor Valhalla (licencia MIT).</li>
                 <li><strong>Backend y base de datos:</strong> FastAPI, Starlette y Uvicorn (licencia MIT); PostgreSQL / SQLite.</li>
@@ -1812,7 +1812,7 @@
       support_email: "copilotoseguromx@gmail.com",
       autenticado: false,
       perfil: null,
-      version: "1.2.0-alpha"
+      version: "1.2.1-alpha"
     };
 
     // Rutas, selección manual y recálculo automático
@@ -2049,7 +2049,7 @@
     }
 
     // =========================================================================
-    // CONFIGURACIÓN Y VOCES
+    // CONFIGURACIÓN Y VOCES (NEURONAL + RESPALDO NAVEGADOR/ANDROID)
     // =========================================================================
     function loadSettings() {
       try {
@@ -2115,6 +2115,21 @@
       sel.value = voces.some(v => v.id === settings.voz) ? settings.voz : voces[0].id;
     }
 
+    function speakBrowserFallback(texto) {
+      if (!("speechSynthesis" in window)) return;
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(texto);
+        utter.lang = "es-MX";
+        const voices = window.speechSynthesis.getVoices() || [];
+        const mxVoice = voices.find(v => v.lang === "es-MX") || voices.find(v => v.lang && v.lang.startsWith("es"));
+        if (mxVoice) utter.voice = mxVoice;
+        utter.rate = Math.max(0.6, Math.min(1.6, 1 + (settings.velocidad || 0) / 100));
+        utter.pitch = Math.max(0.6, Math.min(1.5, 1 + (settings.tono || 0) / 50));
+        window.speechSynthesis.speak(utter);
+      } catch (_) {}
+    }
+
     async function speakTTS(texto, force = false) {
       if (!force && !settings.tts) return;
       try {
@@ -2132,13 +2147,23 @@
             tono: settings.tono
           })
         });
-        if (!r.ok) return;
+        if (!r.ok) {
+          speakBrowserFallback(texto);
+          return;
+        }
         const blob = await r.blob();
+        if (!blob || blob.size < 200) {
+          speakBrowserFallback(texto);
+          return;
+        }
         const url = URL.createObjectURL(blob);
         currentAudio = new Audio(url);
         currentAudio.onended = () => URL.revokeObjectURL(url);
+        currentAudio.onerror = () => speakBrowserFallback(texto);
         await currentAudio.play();
-      } catch (_) {}
+      } catch (_) {
+        speakBrowserFallback(texto);
+      }
     }
 
     function probarVoz() {
@@ -3304,7 +3329,16 @@
         document.getElementById("ia-input").value = text;
         enviarIA();
       };
-      rec.onerror = () => showToast("No se pudo escuchar el micrófono");
+      rec.onerror = e => {
+        const err = e && e.error ? e.error : "";
+        if (err === "not-allowed") {
+          showToast("Permiso de micrófono bloqueado en este sitio");
+        } else if (err === "network" || err === "service-not-allowed") {
+          showToast("Brave en PC bloquea el dictado por voz; escribe tu consulta o úsalo en Android");
+        } else {
+          showToast("No se pudo escuchar el micrófono");
+        }
+      };
       rec.start();
       showToast("Escuchando...");
     }
