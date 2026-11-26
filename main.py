@@ -32,7 +32,7 @@ except ImportError:
 # =============================================================================
 # CONFIGURACIÓN GENERAL Y VARIABLES DE ENTORNO
 # =============================================================================
-APP_VERSION = "1.2.3-alpha"
+APP_VERSION = "1.2.5-alpha"
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "copiloto.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -42,6 +42,7 @@ DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "on"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "copilotoseguromx@gmail.com").strip()
+EMAIL_WEBHOOK_URL = os.getenv("EMAIL_WEBHOOK_URL", "").strip()
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
 ALLOWED_ORIGINS = [
@@ -65,6 +66,7 @@ MX_TZ = timezone(timedelta(hours=-6))
 VALHALLA_URL = os.getenv("VALHALLA_URL", "https://valhalla1.openstreetmap.de/route")
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 PHOTON_URL = "https://photon.komoot.io/api/"
+ARCGIS_GEOCODE_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = f"CopilotoSeguroMX/{APP_VERSION} ({SUPPORT_EMAIL})"
@@ -487,7 +489,7 @@ def decode_polyline(encoded: str, precision: int = 6) -> List[List[float]]:
     return coords
 
 
-def _enviar_correo_sync(categoria: str, asunto: str, cuerpo: str, reply_to: str = "") -> bool:
+def _enviar_correo_smtp_sync(categoria: str, asunto: str, cuerpo: str, reply_to: str = "") -> bool:
     if not SMTP_USER or not SMTP_PASS or not SUPPORT_EMAIL:
         return False
     try:
@@ -504,8 +506,29 @@ def _enviar_correo_sync(categoria: str, asunto: str, cuerpo: str, reply_to: str 
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
         return True
-    except Exception:
+    except Exception as exc:
+        print(f"[Correo SMTP] Error: {exc}")
         return False
+
+
+async def _enviar_correo(categoria: str, asunto: str, cuerpo: str, reply_to: str = "") -> bool:
+    if EMAIL_WEBHOOK_URL:
+        payload = {
+            "to": SUPPORT_EMAIL,
+            "subject": f"[Copiloto Seguro MX · {categoria}] {asunto}",
+            "body": cuerpo,
+            "replyTo": reply_to if (reply_to and "@" in reply_to) else "",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                r = await client.post(EMAIL_WEBHOOK_URL, json=payload)
+                if r.status_code == 200:
+                    return True
+                print(f"[Correo Webhook] HTTP {r.status_code}: {r.text[:160]}")
+        except Exception as exc:
+            print(f"[Correo Webhook] Error: {exc}")
+
+    return await asyncio.to_thread(_enviar_correo_smtp_sync, categoria, asunto, cuerpo, reply_to)
 
 
 def set_session_cookie(response: Response, user_id: int) -> None:
@@ -710,8 +733,22 @@ def serve_index():
     return FileResponse(idx)
 
 
+@app.get("/logo.png")
+def serve_logo():
+    logo = BASE_DIR / "logo.png"
+    if not logo.exists():
+        raise HTTPException(status_code=404, detail="Archivo logo.png no encontrado.")
+    return FileResponse(logo, media_type="image/png")
+
+
 @app.get("/manifest.json")
 def serve_manifest():
+    has_png = (BASE_DIR / "logo.png").exists()
+    icons = (
+        [{"src": "/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]
+        if has_png
+        else [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+    )
     manifest = {
         "name": "Copiloto Seguro MX",
         "short_name": "Copiloto MX",
@@ -722,14 +759,7 @@ def serve_manifest():
         "background_color": "#070d19",
         "theme_color": "#0f172a",
         "lang": "es-MX",
-        "icons": [
-            {
-                "src": "/icon.svg",
-                "sizes": "any",
-                "type": "image/svg+xml",
-                "purpose": "any maskable",
-            }
-        ],
+        "icons": icons,
     }
     return JSONResponse(manifest, media_type="application/manifest+json")
 
@@ -751,6 +781,7 @@ def health():
         "status": "ok",
         "version": APP_VERSION,
         "db": "postgresql" if USE_PG else "sqlite",
+        "email_webhook": bool(EMAIL_WEBHOOK_URL),
     }
 
 
@@ -1104,7 +1135,7 @@ def listar_zonas_sin_senal(lat: float = Query(...), lng: float = Query(...)):
 
 
 # =============================================================================
-# BUSCADOR ANTI-MONTE (NOMINATIM + RESPALDO PHOTON) Y RUTAS
+# BUSCADOR ANTI-MONTE (NOMINATIM + PHOTON + ARCGIS) Y RUTAS
 # =============================================================================
 def _clasificar_lugar(cls_raw: str, typ_raw: str) -> Tuple[int, str]:
     cls = cls_raw.lower()
@@ -1121,7 +1152,7 @@ def _clasificar_lugar(cls_raw: str, typ_raw: str) -> Tuple[int, str]:
             "district": "Zona urbana",
         }
         return (1, etiquetas.get(typ, "Localidad"))
-    if cls in ("amenity", "tourism", "leisure", "shop", "aeroway", "railway", "building", "office"):
+    if cls in ("amenity", "tourism", "leisure", "shop", "aeroway", "railway", "building", "office", "poi"):
         return (2, "Punto de interés")
     if cls == "highway":
         return (3, "Vialidad / Carretera")
@@ -1215,20 +1246,59 @@ async def _buscar_photon(client: httpx.AsyncClient, q: str) -> List[Dict[str, An
     return out
 
 
+async def _buscar_arcgis(client: httpx.AsyncClient, q: str) -> List[Dict[str, Any]]:
+    params = {
+        "SingleLine": q,
+        "sourceCountry": "MEX",
+        "maxLocations": 8,
+        "f": "json",
+    }
+    r = await client.get(ARCGIS_GEOCODE_URL, params=params)
+    r.raise_for_status()
+    cands = r.json().get("candidates") or []
+    out = []
+    for c in cands:
+        loc = c.get("location") or {}
+        if "x" not in loc or "y" not in loc:
+            continue
+        lat, lng = float(loc["y"]), float(loc["x"])
+        if not (14.0 <= lat <= 33.0 and -119.0 <= lng <= -86.0):
+            continue
+        attrs = c.get("attributes") or {}
+        addr_type = str(attrs.get("Addr_type") or "")
+        prio, etiqueta = (1, "Localidad") if addr_type in ("Locality", "City", "AdminPlace") else (2, "Ubicación")
+        out.append(
+            {
+                "prio": prio,
+                "imp": float(c.get("score") or 70.0) / 100.0,
+                "nombre": c.get("address") or q,
+                "etiqueta": etiqueta,
+                "lat": lat,
+                "lng": lng,
+            }
+        )
+    return out
+
+
 @app.get("/buscar-lugar")
 async def buscar_lugar(q: str = Query(..., min_length=2, max_length=120)):
     raw_items: List[Dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT}) as client:
-        try:
-            raw_items = await _buscar_nominatim(client, q)
-        except Exception:
-            raw_items = []
+    any_succeeded = False
 
-        if not raw_items:
+    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT}) as client:
+        for fn in (_buscar_nominatim, _buscar_photon, _buscar_arcgis):
             try:
-                raw_items = await _buscar_photon(client, q)
+                res_fn = await fn(client, q)
+                any_succeeded = True
+                if res_fn:
+                    raw_items.extend(res_fn)
+                    if len(raw_items) >= 4:
+                        break
             except Exception:
-                raise HTTPException(status_code=502, detail="No se pudo consultar el buscador de direcciones.")
+                continue
+
+    if not any_succeeded:
+        raise HTTPException(status_code=502, detail="No se pudo consultar el buscador de direcciones.")
 
     ranked = []
     seen_coords = set()
@@ -2004,7 +2074,7 @@ def pagina_seguir(codigo: str):
 
 
 # =============================================================================
-# MENSAJES, SUGERENCIAS Y ATENCIÓN AL CLIENTE
+# MENSAJES, SUGERENCIAS Y ATENCIÓN AL CLIENTE (WEBHOOK HTTPS + RESPALDO SMTP)
 # =============================================================================
 @app.post("/soporte/mensaje")
 async def enviar_mensaje_soporte(
@@ -2039,7 +2109,7 @@ async def enviar_mensaje_soporte(
         f"{body.mensaje.strip()}\n"
     )
 
-    enviado = await asyncio.to_thread(_enviar_correo_sync, cat, body.asunto.strip(), cuerpo_correo, correo_rem)
+    enviado = await _enviar_correo(cat, body.asunto.strip(), cuerpo_correo, correo_rem)
 
     conn = get_conn()
     try:
@@ -2070,24 +2140,13 @@ async def enviar_mensaje_soporte(
 
 
 # =============================================================================
-# COPILOTO IA (SOPORTE VERTEX AI AQ. + AI STUDIO AIza), ANTI-SUEÑO Y VOZ
+# COPILOTO IA (GEMINI 3.8 FLASH), ANTI-SUEÑO Y VOZ NEURONAL
 # =============================================================================
 async def _llamar_gemini(system_prompt: str, user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         return ""
 
-    modelos = ["gemini-2.5-flash", "gemini-2.0-flash"]
-    if GEMINI_API_KEY.startswith("AQ."):
-        bases = [
-            "https://aiplatform.googleapis.com/v1/publishers/google/models",
-            "https://generativelanguage.googleapis.com/v1beta/models",
-        ]
-    else:
-        bases = [
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            "https://aiplatform.googleapis.com/v1/publishers/google/models",
-        ]
-
+    modelos = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.5-flash"]
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2095,25 +2154,24 @@ async def _llamar_gemini(system_prompt: str, user_prompt: str) -> str:
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for base in bases:
-            for modelo in modelos:
-                url = f"{base}/{modelo}:generateContent?key={GEMINI_API_KEY}"
-                try:
-                    r = await client.post(url, json=payload)
-                    if r.status_code != 200:
-                        print(f"[Gemini] {base} {modelo} -> HTTP {r.status_code}: {r.text[:180]}")
-                        continue
-                    data = r.json()
-                    cands = data.get("candidates") or []
-                    if not cands:
-                        continue
-                    parts = cands[0].get("content", {}).get("parts") or []
-                    texto = "".join(p.get("text", "") for p in parts).strip()
-                    if texto:
-                        return texto
-                except Exception as exc:
-                    print(f"[Gemini] Error {modelo}: {exc}")
+        for modelo in modelos:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                r = await client.post(url, json=payload)
+                if r.status_code != 200:
+                    print(f"[Gemini] {modelo} -> HTTP {r.status_code}: {r.text[:160]}")
                     continue
+                data = r.json()
+                cands = data.get("candidates") or []
+                if not cands:
+                    continue
+                parts = cands[0].get("content", {}).get("parts") or []
+                texto = "".join(p.get("text", "") for p in parts).strip()
+                if texto:
+                    return texto
+            except Exception as exc:
+                print(f"[Gemini] Error {modelo}: {exc}")
+                continue
     return ""
 
 
